@@ -56,6 +56,7 @@ FORMS += \
 
 TRANSLATIONS += \
     ../i18n/zh_CN.ts \
+    ../i18n/zh_TW.ts \
     ../i18n/en_US.ts
 
 # Default rules for deployment.

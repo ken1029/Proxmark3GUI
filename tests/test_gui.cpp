@@ -18,6 +18,7 @@
 #include <QComboBox>
 #include <QMessageBox>
 #include <QSettings>
+#include <QTranslator>
 #include <QTabWidget>
 
 #ifndef SRCDIR
@@ -539,6 +540,20 @@ private slots:
         thread.quit();
         QVERIFY(thread.wait(5000));
         delete process;
+    }
+
+    // The Traditional Chinese translation must be built in and registered.
+    void traditionalChineseTranslation()
+    {
+        QTranslator tw;
+        QVERIFY(tw.load(QStringLiteral(":/i18n/zh_TW.qm")));
+        QCOMPARE(tw.translate("Util", "Choose a language:"), QString::fromUtf8("選擇語言："));
+        QCOMPARE(tw.translate("MainWindow", "Client Path:"), QString::fromUtf8("客戶端路徑："));
+
+        QSettings languages(QStringLiteral(":/i18n/languages.ini"), QSettings::IniFormat);
+        languages.setIniCodec("UTF-8");
+        languages.beginGroup("Languages");
+        QVERIFY(languages.allKeys().contains(QStringLiteral("zh_TW")));
     }
 
     // Closing the window while the client is still starting must not leave the
