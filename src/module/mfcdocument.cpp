@@ -1101,6 +1101,28 @@ bool Document::parseKeyText(const QString& text, Document* doc, QString* error, 
     return true;
 }
 
+static bool looksLikeKeyText(const QByteArray& data)
+{
+    if(data.isEmpty())
+        return false;
+    bool hasNewline = false;
+    for(const char raw : data)
+    {
+        const unsigned char c = static_cast<unsigned char>(raw);
+        if(c == '\n' || c == '\r')
+        {
+            hasNewline = true;
+            continue;
+        }
+        if(c == ' ' || c == '\t' || c == ':' || c == '#' || c == '/'
+           || c == '?' || c == '|' || c == ','
+           || (c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f'))
+            continue;
+        return false;
+    }
+    return hasNewline;
+}
+
 IoResult Document::loadKeyFile(const QString& filename, const QString& layoutHint, Document* out)
 {
     IoResult result;
@@ -1119,7 +1141,7 @@ IoResult Document::loadKeyFile(const QString& filename, const QString& layoutHin
     {
         if(trimmed.startsWith('{'))
             layout = QStringLiteral("json");
-        else if(data.contains(':'))
+        else if(looksLikeKeyText(data))
             layout = QStringLiteral("text");
         else if(data.size() == 5 * 12 || data.size() == 16 * 12
                 || data.size() == 32 * 12 || data.size() == 40 * 12)
