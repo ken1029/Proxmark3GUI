@@ -1,4 +1,4 @@
-#include "ui/mfcworkbench.h"
+﻿#include "ui/mfcworkbench.h"
 
 #include <QApplication>
 #include <QAbstractItemView>
@@ -29,6 +29,7 @@
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QSaveFile>
+#include <QSignalBlocker>
 #include <QScrollBar>
 #include <QSpinBox>
 #include <QTabWidget>
@@ -433,7 +434,118 @@ void MfcWorkbench::setConfigMap(const QVariantMap& config)
 void MfcWorkbench::setDeviceReady(bool ready)
 {
     deviceReady = ready;
+    if(ready)
+    {
+        // A new client connection is a new RF session: keys verified before it
+        // stay in the document as history but are not evidence for this card.
+        targetSession = ++sessionSeq;
+        targetPresent = true;
+        targetUidValue.clear();
+        targetType = doc.cardType();
+        setStatus(tr("Client connected; identify the card before reading or writing"));
+    }
+    else
+    {
+        invalidateTargetWhenDisconnected();
+    }
+    refreshIdentity();
     refreshSummary();
+}
+
+void MfcWorkbench::invalidateTargetWhenDisconnected()
+{
+    if(!targetPresent && targetSession != 0)
+        return;
+    targetPresent = false;
+    targetSession = ++sessionSeq;
+    targetUidValue.clear();
+}
+
+bool MfcWorkbench::documentMatchesTarget() const
+{
+    return targetPresent && !doc.uid.isEmpty() && !targetUidValue.isEmpty()
+           && doc.uid.compare(targetUidValue, Qt::CaseInsensitive) == 0
+           && doc.cardType() == targetType;
+}
+
+bool MfcWorkbench::applyCardIdentity(const QString& uid, Mfc::CardType type, QString* error)
+{
+    const QString normalized = uid.trimmed().toUpper();
+    if(normalized.isEmpty())
+    {
+        if(error != nullptr)
+            *error = tr("The card did not report a UID");
+        return false;
+    }
+    targetUidValue = normalized;
+    targetType = type;
+    // Same card (or an empty document): adopt the identity.  A different card
+    // keeps the old document intact and must be resolved by the user.
+    if(doc.uid.isEmpty() || doc.uid.compare(normalized, Qt::CaseInsensitive) == 0)
+    {
+        if(doc.cardType() != type)
+        {
+            // Changing the size clears the document, so it is only automatic
+            // when there is nothing to lose.
+            if(doc.completeBlockCount() > 0 || doc.verifiedKeyCount() > 0
+               || doc.pendingKeyCount() > 0)
+            {
+                if(error != nullptr)
+                    *error = tr("The document is %1 but the card is %2; start a new document "
+                                "for this card to change the size.")
+                             .arg(doc.cardDisplayName(), Mfc::Spec::get(type).displayName());
+                refreshIdentity();
+                return false;
+            }
+            doc.setCardType(type);
+            nonce = MfcRecovery::NonceType::Unknown;
+            updatingTables = true;
+            cardTypeBox->setCurrentIndex(cardTypeBox->findData(typeToInt(type)));
+            updatingTables = false;
+            emit documentTypeChanged(typeToInt(type));
+        }
+        doc.uid = normalized;
+        refreshIdentity();
+        return true;
+    }
+    if(error != nullptr)
+        *error = tr("The document belongs to card %1 (%2); the card in the field is %3 (%4).")
+                 .arg(doc.uid, doc.cardDisplayName(), normalized, Mfc::Spec::get(type).displayName());
+    refreshIdentity();
+    return false;
+}
+
+bool MfcWorkbench::startNewDocumentForTarget(QString* error)
+{
+    if(!targetPresent || targetUidValue.isEmpty())
+    {
+        if(error != nullptr)
+            *error = tr("Identify the card first");
+        return false;
+    }
+    doc = Mfc::Document(targetType);
+    doc.uid = targetUidValue;
+    nonce = MfcRecovery::NonceType::Unknown;
+    updatingTables = true;
+    cardTypeBox->setCurrentIndex(cardTypeBox->findData(typeToInt(targetType)));
+    updatingTables = false;
+    refreshKeyTable();
+    refreshDataTable();
+    refreshAdvice();
+    refreshSummary();
+    applyToMifare();
+    emit documentTypeChanged(typeToInt(targetType));
+    setStatus(tr("New document for card %1").arg(targetUidValue));
+    return true;
+}
+
+void MfcWorkbench::refreshIdentity()
+{
+    if(!targetPresent)
+        return;
+    if(doc.uid.isEmpty())
+        setStatus(tr("Card %1 in the field; identify it to bind the document")
+                  .arg(targetUidValue.isEmpty() ? tr("(unknown UID)") : targetUidValue));
 }
 
 void MfcWorkbench::importFromMifare()
@@ -511,18 +623,25 @@ void MfcWorkbench::refresh()
 
 void MfcWorkbench::refreshSummary()
 {
-    cardLabel->setText(doc.cardDisplayName() + (doc.uid.isEmpty() ? QString() : QStringLiteral(" / ") + doc.uid));
+    QString identity = doc.cardDisplayName();
+    if(!doc.uid.isEmpty())
+        identity += QStringLiteral(" / ") + doc.uid;
+    if(!documentMatchesTarget())
+        identity += tr("   [not the card in the field]");
+    cardLabel->setText(identity);
     uidLabel->setText(doc.uid.isEmpty() ? tr("(not read)") : doc.uid);
     nonceLabel->setText(nonceText());
-    keySummary->setText(tr("Verified keys %1/%2 | pending %3 | unknown %4")
-                        .arg(doc.verifiedKeyCount()).arg(doc.keyCount())
+    const int current = targetSession == 0 ? 0 : doc.verifiedKeyCountIn(targetSession);
+    keySummary->setText(tr("Verified keys %1/%2 in this session | historical %3 | pending %4 | unknown %5")
+                        .arg(current).arg(doc.keyCount())
+                        .arg(doc.verifiedKeyCount() - current)
                         .arg(doc.pendingKeyCount()).arg(doc.unknownKeyCount()));
     blockSummary->setText(tr("Read blocks %1/%2 | unknown %3 | modified %4")
                           .arg(doc.completeBlockCount()).arg(doc.blockCount())
                           .arg(doc.unknownBlockCount()).arg(doc.modifiedBlockCount()));
     if(!taskRunning)
         stageLabel->setText(tr("Idle"));
-    runButton->setEnabled(deviceReady && !taskRunning);
+    runButton->setEnabled(deviceReady && !taskRunning && !planBusy);
     cancelButton->setEnabled(taskRunning);
 }
 
@@ -879,7 +998,11 @@ void MfcWorkbench::startMethod(MfcRecovery::Method method, const MfcRecovery::Co
     Util::AsyncCommand async;
     async.cmd = command.text;
     async.failurePatterns = QStringList({command.failurePattern});
-    async.useCompletionMarker = true;
+    // Recovery commands poll stdin in v4.23346: they run in a one-shot client
+    // process whose exit is the completion boundary, so no "rem" line is ever
+    // queued behind a command that would read it as a key press.
+    async.isolated = command.usesStdin;
+    async.useCompletionMarker = !command.usesStdin;
     async.hardTimeoutMs = command.hardTimeoutMs;
     async.label = MfcRecovery::methodName(method);
 
@@ -896,12 +1019,20 @@ void MfcWorkbench::startMethod(MfcRecovery::Method method, const MfcRecovery::Co
         setStatus(tr("The client is busy with another command"));
         return;
     }
-    setStatus(tr("Running %1...").arg(MfcRecovery::methodName(method)));
+    taskSession = util->commandSession();
+    setStatus(command.usesStdin
+              ? tr("Running %1 in a one-shot client (the workbench disconnects while it runs)...")
+                .arg(MfcRecovery::methodName(method))
+              : tr("Running %1...").arg(MfcRecovery::methodName(method)));
 }
 
 void MfcWorkbench::onCommandOutput(const QString& output)
 {
     if(!taskRunning)
+        return;
+    // Late output of an earlier task may not be attributed to this one.
+    const quint64 session = util->commandSession();
+    if(taskSession != 0 && session != 0 && session != taskSession)
         return;
     const QString clean = Util::stripAnsi(output);
     taskOutput += clean;
@@ -918,6 +1049,7 @@ void MfcWorkbench::onCommandFinished(const Util::ExecResult& result, const QStri
     if(!taskRunning)
         return;
     taskOutput = Util::stripAnsi(output);
+    taskSession = 0;
     const MfcRecovery::ParseResult parsed = MfcRecovery::parseOutput(taskOutput, doc.spec());
     applyParsedResult(parsed, currentMethod, result.status);
 
@@ -987,7 +1119,7 @@ void MfcWorkbench::applyParsedResult(const MfcRecovery::ParseResult& parsed,
     Mfc::KeySource source = Mfc::KeySource::Recovery;
     if(method == MfcRecovery::Method::Dictionary)
         source = Mfc::KeySource::Dictionary;
-    MfcRecovery::MergeResult merged = MfcRecovery::merge(parsed, &doc, true, source);
+    MfcRecovery::MergeResult merged = MfcRecovery::merge(parsed, &doc, true, source, targetSession);
     for(const QString& note : parsed.warnings)
         logLine(tr("Parser: %1").arg(note));
     for(const QString& note : merged.notes)
@@ -1012,8 +1144,10 @@ void MfcWorkbench::cancelTask()
     box.setWindowTitle(tr("Cancel task"));
     box.setText(tr("How should the running task be stopped?"));
     box.setInformativeText(tr("Stop waiting keeps the client and the device state; "
-                              "completed keys are kept. Abort client disconnects the client "
-                              "and reconnects it, which is the only safe way to stop a long command."));
+                              "completed keys are kept. The client may still be executing the "
+                              "command, so every page stays blocked until it reports a completion "
+                              "boundary. Abort client stops the one-shot client (or reconnects a "
+                              "persistent one)."));
     QPushButton* stopWait = box.addButton(tr("Stop waiting"), QMessageBox::AcceptRole);
     QPushButton* abortClient = box.addButton(tr("Abort client"), QMessageBox::AcceptRole);
     box.addButton(QMessageBox::Cancel);
@@ -1022,11 +1156,14 @@ void MfcWorkbench::cancelTask()
     {
         cancelRequested = true;
         util->cancelCommand(false);
-        // The client may still be executing the command.  Do not let another
-        // device task start until the user reconnects (Stop / Connect).
-        deviceReady = false;
+        // The client may still be executing the command.  Util keeps the
+        // channel reserved for every page; this workbench additionally needs a
+        // new identification before it reuses keys, because the card may have
+        // been removed in the meantime.
+        invalidateTargetWhenDisconnected();
         refreshSummary();
-        setStatus(tr("Stopped waiting; the client may still be executing. Reconnect before the next task."));
+        setStatus(tr("Stopped waiting; the client may still be executing. "
+                     "Reconnect and identify the card before the next task."));
     }
     else if(box.clickedButton() == abortClient)
     {
@@ -1039,6 +1176,11 @@ void MfcWorkbench::verifyKeys()
 {
     if(!deviceReady || taskRunning)
         return;
+    if(!documentMatchesTarget())
+    {
+        setStatus(tr("Identify the card first: keys are verified against the card in the field"));
+        return;
+    }
     QList<QPair<int, char>> pending;
     for(int s = 0; s < doc.sectorCount(); s++)
     {
@@ -1096,7 +1238,7 @@ bool MfcWorkbench::verifyOneKey(int sector, char type, const QString& key)
     const bool ok = readBlockOnce(block, type, key, &hex, &error);
     if(ok)
     {
-        doc.setKeyVerified(sector, type, key, Mfc::KeySource::Manual);
+        doc.setKeyVerified(sector, type, key, Mfc::KeySource::Manual, targetSession);
         return true;
     }
     doc.setKey(sector, type, key, Mfc::KeyState::Failed, Mfc::KeySource::Manual);
@@ -1106,10 +1248,12 @@ bool MfcWorkbench::verifyOneKey(int sector, char type, const QString& key)
 
 bool MfcWorkbench::chooseVerifiedKey(int sector, char* type, QString* key) const
 {
+    // Only a key authenticated in the current RF session may be used on the
+    // card that is in the field now.
     for(char candidate : {'A', 'B'})
     {
         const Mfc::KeyEntry& entry = doc.key(sector, candidate);
-        if(entry.verified() && entry.hasValue())
+        if(entry.verifiedIn(targetSession) && entry.hasValue())
         {
             *type = candidate;
             *key = entry.value;
@@ -1164,6 +1308,11 @@ void MfcWorkbench::readUnknownBlocks()
 {
     if(!deviceReady || taskRunning)
         return;
+    if(!documentMatchesTarget())
+    {
+        setStatus(tr("Identify the card first: reads need keys verified against this card"));
+        return;
+    }
     taskRunning = true;
     cancelRequested = false;
     tracker.start(MfcRecovery::Method::KnownKeys, doc.blockCount());
@@ -1189,14 +1338,11 @@ void MfcWorkbench::readUnknownBlocks()
         QString hex;
         QString error;
         bool ok = readBlockOnce(block, keyType, key, &hex, &error);
-        if(!ok)
+        if(!ok && keyType == 'A')
         {
-            if(keyType == 'A')
-            {
-                const Mfc::KeyEntry& b = doc.key(sector, 'B');
-                if(b.verified() && b.hasValue())
-                    ok = readBlockOnce(block, 'B', b.value, &hex, &error);
-            }
+            const Mfc::KeyEntry& b = doc.key(sector, 'B');
+            if(b.verifiedIn(targetSession) && b.hasValue())
+                ok = readBlockOnce(block, 'B', b.value, &hex, &error);
         }
         if(!ok)
         {
@@ -1209,22 +1355,11 @@ void MfcWorkbench::readUnknownBlocks()
 
         if(doc.spec().isTrailerBlock(block))
         {
-            // Trailer read with A: bytes 0..5 = key A, 6..9 = access bits,
-            // 10..15 = key B (unreadable with A).  Keep the verified key and
-            // never invent the other one.
-            const QString a = doc.key(sector, 'A').value;
-            const QString b = doc.key(sector, 'B').value;
-            const QString acl = hex.mid(12, 8);
-            const bool aclValid = Mifare::data_isACBitsValid(acl);
-            QString merged = (Mfc::Document::isKeyText(a) ? a : QString(12, QLatin1Char('?')))
-                             + (aclValid ? acl : QString(8, QLatin1Char('?')))
-                             + (Mfc::Document::isKeyText(b) ? b : QString(12, QLatin1Char('?')));
-            if(Mfc::Document::isBlockText(merged))
-                doc.setBlock(block, merged, Mfc::BlockState::Read);
+            doc.setBlock(block, trailerReadback(block, keyType, hex), Mfc::BlockState::Read, targetSession);
         }
         else
         {
-            doc.setBlock(block, hex, Mfc::BlockState::Read);
+            doc.setBlock(block, hex, Mfc::BlockState::Read, targetSession);
         }
         read++;
         if(read % 8 == 0)
@@ -1246,6 +1381,28 @@ void MfcWorkbench::readUnknownBlocks()
     tracker.finish(cancelRequested ? MfcRecovery::TaskState::Cancelled
                                    : MfcRecovery::TaskState::Completed, message);
     setStatus(message);
+}
+
+QString MfcWorkbench::trailerReadback(int block, char authType, const QString& cardHex) const
+{
+    // A trailer read returns Key A masked, the access bytes, and Key B only
+    // when the access conditions make it readable as data.  Values that were
+    // not returned are left unknown; only a key authenticated in this session
+    // may fill Key A (the read proves that key works on this sector).
+    const QString read = Mfc::Document::normalizeHex(cardHex);
+    const int sector = doc.spec().sectorOfBlock(block);
+    const Mfc::KeyEntry& keyA = doc.key(sector, 'A');
+    QString result = keyA.verifiedIn(targetSession) ? keyA.value : QString(12, QLatin1Char('?'));
+    if(read.size() != 32 || !Mfc::Document::isBlockText(read))
+        return result + QString(20, QLatin1Char('?'));
+    const QString acl = read.mid(12, 8);
+    if(!Mfc::TrailerAcl::valid(acl))
+        return result + QString(20, QLatin1Char('?'));
+    result += acl;
+    const bool keyBReadable = Mfc::TrailerAcl::keyBReadable(acl)
+                              && Mfc::TrailerAcl::aclReadable(acl, authType);
+    result += keyBReadable ? read.mid(20, 12) : QString(12, QLatin1Char('?'));
+    return result;
 }
 
 void MfcWorkbench::saveBackup()
@@ -1277,107 +1434,223 @@ void MfcWorkbench::saveBackup()
         allowUnknown = true;
     }
 
-    const Mfc::IoResult result = doc.saveDataFile(filename, format, allowUnknown);
+    QString error;
+    if(!saveBackupTo(filename, &error, allowUnknown))
+    {
+        QMessageBox::information(this, tr("Info"), error);
+        setStatus(error);
+    }
+}
+
+bool MfcWorkbench::saveBackupTo(const QString& filename, QString* error, bool allowUnknownBin)
+{
+    QString format = "json";
+    if(filename.endsWith(".eml", Qt::CaseInsensitive) || filename.endsWith(".txt", Qt::CaseInsensitive))
+        format = "eml";
+    else if(filename.endsWith(".bin", Qt::CaseInsensitive) || filename.endsWith(".dump", Qt::CaseInsensitive))
+        format = "bin";
+
+    const Mfc::IoResult result = doc.saveDataFile(filename, format, allowUnknownBin);
     if(!result.ok)
     {
-        QMessageBox::information(this, tr("Info"), result.error);
-        setStatus(result.error);
-        return;
+        if(error != nullptr)
+            *error = result.error;
+        return false;
     }
     if(!result.warning.isEmpty())
         logLine(result.warning);
-    const QString hash = doc.sha256();
+
+    // The sidecar must describe the file that was written, not the internal
+    // document digest: "sha256sum -c" and Get-FileHash have to agree with it.
+    QString hashError;
+    const QString hash = Mfc::Document::sha256OfFile(filename, &hashError);
+    if(hash.isEmpty())
+    {
+        const QString message = tr("Backup saved, but %1").arg(hashError);
+        logLine(message);
+        if(error != nullptr)
+            *error = message;
+        setStatus(tr("Backup saved; the .sha256 sidecar could not be computed"));
+        return false;
+    }
     QFile sidecar(filename + ".sha256");
-    if(sidecar.open(QIODevice::WriteOnly | QIODevice::Text))
-        sidecar.write((hash + "  " + QFileInfo(filename).fileName() + "\n").toUtf8());
+    if(!sidecar.open(QIODevice::WriteOnly | QIODevice::Text)
+       || sidecar.write((hash + "  " + QFileInfo(filename).fileName() + "\n").toUtf8()) < 0
+       || !sidecar.flush())
+    {
+        const QString message = tr("Backup saved, but the .sha256 sidecar could not be written");
+        logLine(message);
+        if(error != nullptr)
+            *error = message;
+        setStatus(tr("Backup saved; sidecar failed"));
+        return false;
+    }
     logLine(tr("Saved %1 (sha256 %2)").arg(filename, hash));
     setStatus(tr("Backup saved; sha256 %1").arg(hash.left(16)));
+    return true;
 }
 
-bool MfcWorkbench::writeBlockOnce(int block, const QString& hex, QString* error)
+Mfc::WriteOutcome MfcWorkbench::writeBlockOnce(int block, const QString& hex,
+                                              const Mfc::TrailerPlan* trailer, QString* detail)
 {
+    auto say = [detail](const QString& text) {
+        if(detail != nullptr)
+            *detail = text;
+    };
     const int sector = doc.spec().sectorOfBlock(block);
-    QList<QPair<char, QString>> candidates;
-    for(char type : {'A', 'B'})
+    const bool isTrailer = doc.spec().isTrailerBlock(block);
+
+    char keyType = 0;
+    QString key;
+    if(isTrailer)
     {
-        const Mfc::KeyEntry& entry = doc.key(sector, type);
-        if(entry.verified() && entry.hasValue())
-            candidates.append(qMakePair(type, entry.value));
+        // The trailer may only be written with a key the card's *current*
+        // access conditions accept; the plan already decided that.
+        if(trailer == nullptr || !trailer->valid || trailer->writeKeyType == 0)
+        {
+            say(trailer != nullptr && !trailer->error.isEmpty()
+                ? trailer->error : tr("no trailer write plan"));
+            return Mfc::WriteOutcome::Blocked;
+        }
+        keyType = trailer->writeKeyType;
+        key = doc.key(sector, keyType).value;
+        if(!doc.key(sector, keyType).verifiedIn(targetSession) || !Mfc::Document::isKeyText(key))
+        {
+            say(tr("Key %1 of sector %2 is not verified in this session").arg(QChar(keyType)).arg(sector));
+            return Mfc::WriteOutcome::Blocked;
+        }
     }
-    if(candidates.isEmpty())
+    else if(!chooseVerifiedKey(sector, &keyType, &key))
     {
-        if(error != nullptr)
-            *error = tr("no verified key for sector %1").arg(sector);
-        return false;
+        say(tr("no verified key for sector %1").arg(sector));
+        return Mfc::WriteOutcome::Blocked;
     }
 
     const QVariantMap config = configMap.value("normal write block").toMap();
     const QVariantMap types = config.value("key type").toMap();
-    QString lastError;
-    for(const auto& candidate : candidates)
+    QString cmd = config.value("cmd").toString();
+    if(cmd.isEmpty())
+        cmd = QStringLiteral("hf mf wrbl --blk <block> -<key type> -k <key> -d <data> --force");
+    const QString typeName = QString(QChar(keyType));
+    cmd.replace(QStringLiteral("<block>"), QString::number(block));
+    cmd.replace(QStringLiteral("<key type>"), types.value(typeName).toString().isEmpty()
+                ? typeName.toLower() : types.value(typeName).toString());
+    cmd.replace(QStringLiteral("<key>"), key);
+    cmd.replace(QStringLiteral("<data>"), hex);
+    const Util::ExecResult result = util->execCMDWithResult(cmd, Pm3Cmd::makeWriteTrigger(config, 3000));
+    if(!result.isOk() || result.failurePatternMatched)
     {
-        const char keyType = candidate.first;
-        const QString& key = candidate.second;
-        QString cmd = config.value("cmd").toString();
-        if(cmd.isEmpty())
-            cmd = QStringLiteral("hf mf wrbl --blk <block> -<key type> -k <key> -d <data> --force");
-        const QString typeName = QString(QChar(keyType));
-        cmd.replace(QStringLiteral("<block>"), QString::number(block));
-        cmd.replace(QStringLiteral("<key type>"), types.value(typeName).toString().isEmpty()
-                    ? typeName.toLower() : types.value(typeName).toString());
-        cmd.replace(QStringLiteral("<key>"), key);
-        cmd.replace(QStringLiteral("<data>"), hex);
-        Util::ExecResult result = util->execCMDWithResult(cmd, Pm3Cmd::makeWriteTrigger(config, 3000));
-        if(!result.isOk())
-        {
-            lastError = tr("write failed or timed out");
-            continue;
-        }
+        say(tr("write failed or timed out"));
+        return Mfc::WriteOutcome::WriteFailed;
+    }
 
-        // Read back.  A trailer may mask the other key with '?'; that is not a
-        // verified mismatch, but a readable different value is.
+    if(!isTrailer)
+    {
         QString readBack;
         QString readError;
         if(!readBlockOnce(block, keyType, key, &readBack, &readError))
         {
-            lastError = tr("write ok, read-back failed: %1").arg(readError);
-            continue;
+            // The client reported a successful write: this is not a failure,
+            // it is a write that could not be proven.
+            say(tr("write reported ok, read-back failed: %1").arg(readError));
+            return Mfc::WriteOutcome::WrittenUnverified;
         }
-        if(readBack != hex && !readBack.contains(QLatin1Char('?')))
+        if(readBack != hex)
         {
-            lastError = tr("read-back mismatch");
-            continue;
+            say(tr("read-back differs: %1").arg(spacedHex(readBack)));
+            return Mfc::WriteOutcome::Mismatch;
         }
-        doc.setBlock(block, hex, Mfc::BlockState::Verified);
-        return true;
+        say(tr("read back ok"));
+        return Mfc::WriteOutcome::Verified;
     }
-    if(error != nullptr)
-        *error = lastError;
-    return false;
+
+    // Trailer: verify with the *new* keys.  Key A is never returned, so a
+    // successful authentication is what proves it; the access bytes and Key B
+    // are compared only when the new access conditions return them.
+    const Mfc::TrailerVerifyPlan& verify = trailer->verify;
+    const QString newAcl = hex.mid(12, 8);
+    const QString newKeyB = hex.mid(20, 12);
+    const char authType = verify.authType == 0 ? 'A' : verify.authType;
+    const QString authKey = authType == 'A' ? hex.mid(0, 12) : newKeyB;
+    QString readBack;
+    QString readError;
+    if(!readBlockOnce(block, authType, authKey, &readBack, &readError))
+    {
+        say(tr("write reported ok; the card did not answer the verification read (%1)").arg(readError));
+        return Mfc::WriteOutcome::WrittenUnverified;
+    }
+    if(readBack.size() != 32)
+    {
+        say(tr("write reported ok; the verification read was incomplete"));
+        return Mfc::WriteOutcome::WrittenUnverified;
+    }
+    QStringList differences;
+    if(verify.checkAcl && readBack.mid(12, 8) != newAcl)
+        differences << tr("access bits %1 (wanted %2)").arg(readBack.mid(12, 8), newAcl);
+    const bool keyBComparable = verify.checkKeyB && Mfc::TrailerAcl::keyBReadable(newAcl);
+    if(keyBComparable && readBack.mid(20, 12) != newKeyB)
+        differences << tr("Key B %1 (wanted %2)").arg(readBack.mid(20, 12), newKeyB);
+    if(!differences.isEmpty())
+    {
+        say(tr("read-back differs: %1").arg(differences.join(QStringLiteral(", "))));
+        return Mfc::WriteOutcome::Mismatch;
+    }
+    if(keyBComparable)
+        say(tr("verified: Key A authenticates, access bits and Key B match"));
+    else
+        say(tr("verified: Key A authenticates, access bits match (Key B is not readable)"));
+    return Mfc::WriteOutcome::Verified;
 }
 
 void MfcWorkbench::writePlan()
 {
-    if(!deviceReady || taskRunning)
+    if(taskRunning || planBusy)
+    {
+        setStatus(tr("Another device task is still running"));
+        return;
+    }
+    if(!deviceReady)
     {
         setStatus(tr("Connect the Proxmark3 first"));
         return;
     }
+    if(!documentMatchesTarget())
+    {
+        setStatus(tr("Identify the card first: the write plan is bound to the card in the field"));
+        return;
+    }
+
+    // Freeze the source document and the RF session.  Every command below is
+    // checked against this snapshot; a card change aborts the plan instead of
+    // writing one card's data onto another.
+    plan.reset(doc, targetSession);
+    if(plan.isEmpty())
+    {
+        setStatus(tr("No complete block to write"));
+        return;
+    }
+
     QDialog dialog(this);
+    dialog.setObjectName("mfcWritePlanDialog");
     dialog.setWindowTitle(tr("Write plan"));
     dialog.resize(900, 520);
     QVBoxLayout* layout = new QVBoxLayout(&dialog);
     QLabel* hint = new QLabel(tr("Only complete blocks are written. Block 0 and trailers are "
-                                 "excluded unless you explicitly include them."), &dialog);
+                                 "excluded unless you explicitly include them; a trailer also "
+                                 "needs a preview so its current access conditions can be checked."),
+                              &dialog);
     hint->setWordWrap(true);
     layout->addWidget(hint);
 
     QCheckBox* block0Box = new QCheckBox(tr("Include block 0 (UID/manufacturer)"), &dialog);
     QCheckBox* trailerBox = new QCheckBox(tr("Include sector trailers (keys / access bits)"), &dialog);
+    block0Box->setObjectName("mfcWriteIncludeBlock0");
+    trailerBox->setObjectName("mfcWriteIncludeTrailers");
     layout->addWidget(block0Box);
     layout->addWidget(trailerBox);
 
     QTableWidget* table = new QTableWidget(&dialog);
+    table->setObjectName("mfcWriteTable");
     table->setColumnCount(6);
     table->setHorizontalHeaderLabels(QStringList()
                                      << tr("Write") << tr("Block") << tr("Type")
@@ -1396,6 +1669,11 @@ void MfcWorkbench::writePlan()
     QPushButton* retryButton = new QPushButton(tr("Retry failed only"), &dialog);
     QPushButton* stopButton = new QPushButton(tr("Stop after current block"), &dialog);
     QPushButton* closeButton = new QPushButton(tr("Close"), &dialog);
+    previewButton->setObjectName("mfcWritePreview");
+    writeButton->setObjectName("mfcWriteWrite");
+    retryButton->setObjectName("mfcWriteRetry");
+    stopButton->setObjectName("mfcWriteStop");
+    closeButton->setObjectName("mfcWriteClose");
     buttons->addWidget(previewButton);
     buttons->addWidget(writeButton);
     buttons->addWidget(retryButton);
@@ -1404,172 +1682,318 @@ void MfcWorkbench::writePlan()
     buttons->addWidget(closeButton);
     layout->addLayout(buttons);
 
-    QList<int> rows;
-    for(int block = 0; block < doc.blockCount(); block++)
-        if(doc.blockComplete(block))
-            rows.append(block);
-
-    auto applyDefaults = [&]() {
-        for(int row = 0; row < table->rowCount(); row++)
-        {
-            const int block = table->item(row, 1)->data(Qt::UserRole).toInt();
-            const bool isBlock0 = block == 0;
-            const bool isTrailer = doc.spec().isTrailerBlock(block);
-            const bool check = !isBlock0 && !isTrailer;
-            table->item(row, 0)->setCheckState(check ? Qt::Checked : Qt::Unchecked);
-        }
-    };
-
+    const QVector<Mfc::WriteRow> rows = plan.rows();
     table->setRowCount(rows.size());
     for(int row = 0; row < rows.size(); row++)
     {
-        const int block = rows.at(row);
+        const int block = rows.at(row).block;
         QTableWidgetItem* check = new QTableWidgetItem();
         check->setFlags(Qt::ItemIsUserCheckable | Qt::ItemIsEnabled);
-        check->setCheckState(Qt::Checked);
+        check->setCheckState(Qt::Unchecked);
         table->setItem(row, 0, check);
         QTableWidgetItem* blockItem = readOnlyItem(QString::number(block));
         blockItem->setData(Qt::UserRole, block);
         table->setItem(row, 1, blockItem);
         table->setItem(row, 2, readOnlyItem(doc.spec().isTrailerBlock(block) ? tr("trailer") : tr("data")));
-        table->setItem(row, 3, readOnlyItem(spacedHex(doc.blockHex(block))));
+        table->setItem(row, 3, readOnlyItem(spacedHex(plan.source().blockHex(block))));
         table->setItem(row, 4, readOnlyItem(QString()));
-        table->setItem(row, 5, readOnlyItem(tr("not checked")));
+        table->setItem(row, 5, readOnlyItem(QString()));
     }
-    applyDefaults();
+
+    auto syncRow = [&](int row) {
+        const Mfc::WriteRow current = plan.rows().at(row);
+        const QSignalBlocker blocker(table);
+        table->item(row, 0)->setCheckState(current.selected ? Qt::Checked : Qt::Unchecked);
+        table->item(row, 4)->setText(current.cardHex.isEmpty() ? QString() : spacedHex(current.cardHex));
+        QString state;
+        if(current.outcome != Mfc::WriteOutcome::Pending)
+            state = Mfc::writeOutcomeName(current.outcome);
+        else if(current.preview != Mfc::PreviewState::NotPreviewed)
+            state = Mfc::previewStateName(current.preview);
+        if(!current.note.isEmpty())
+            state = state.isEmpty() ? current.note : state + QStringLiteral(" - ") + current.note;
+        if(!state.isEmpty() && !current.allowed && !current.blockedReason.isEmpty())
+            state += QStringLiteral(" [") + current.blockedReason + QStringLiteral("]");
+        else if(state.isEmpty() && !current.allowed)
+            state = current.blockedReason;
+        table->item(row, 5)->setText(state);
+    };
+    auto syncAll = [&]() {
+        for(int row = 0; row < plan.rows().size(); row++)
+            syncRow(row);
+    };
+    auto applyInclude = [&]() {
+        plan.setIncludeBlock0(block0Box->isChecked());
+        plan.setIncludeTrailers(trailerBox->isChecked());
+    };
+    auto setBusy = [&](bool busy) {
+        planBusy = busy;
+        previewButton->setEnabled(!busy);
+        writeButton->setEnabled(!busy);
+        retryButton->setEnabled(!busy);
+        closeButton->setEnabled(!busy);
+        stopButton->setEnabled(busy);
+        table->setEnabled(!busy);
+        block0Box->setEnabled(!busy);
+        trailerBox->setEnabled(!busy);
+        refreshSummary();
+    };
+
+    // Default: every ordinary data block that already has a verified key.
+    for(int row = 0; row < plan.rows().size(); row++)
+    {
+        const int block = plan.rows().at(row).block;
+        if(block == 0 || doc.spec().isTrailerBlock(block))
+            continue;
+        plan.select(block, true);
+    }
+    syncAll();
+
+    connect(table, &QTableWidget::itemChanged, &dialog, [&](QTableWidgetItem* item) {
+        if(planBusy || item == nullptr || item->column() != 0)
+            return;
+        const int block = table->item(item->row(), 1)->data(Qt::UserRole).toInt();
+        const bool wanted = item->checkState() == Qt::Checked;
+        QString reason;
+        if(!plan.select(block, wanted, &reason))
+            setStatus(reason);
+        syncRow(item->row());
+    });
     connect(block0Box, &QCheckBox::toggled, &dialog, [&](bool on) {
-        for(int row = 0; row < table->rowCount(); row++)
-            if(table->item(row, 1)->data(Qt::UserRole).toInt() == 0)
-                table->item(row, 0)->setCheckState(on ? Qt::Checked : Qt::Unchecked);
+        if(planBusy)
+            return;
+        applyInclude();
+        plan.select(0, on);
+        syncAll();
     });
     connect(trailerBox, &QCheckBox::toggled, &dialog, [&](bool on) {
-        for(int row = 0; row < table->rowCount(); row++)
-        {
-            const int block = table->item(row, 1)->data(Qt::UserRole).toInt();
-            if(doc.spec().isTrailerBlock(block))
-                table->item(row, 0)->setCheckState(on ? Qt::Checked : Qt::Unchecked);
-        }
+        if(planBusy)
+            return;
+        applyInclude();
+        for(const Mfc::WriteRow& row : plan.rows())
+            if(doc.spec().isTrailerBlock(row.block))
+                plan.select(row.block, on);
+        syncAll();
     });
-
     connect(retryButton, &QPushButton::clicked, &dialog, [&]() {
-        for(int row = 0; row < table->rowCount(); row++)
-        {
-            const bool failed = table->item(row, 5)->text() == tr("failed");
-            table->item(row, 0)->setCheckState(failed ? Qt::Checked : Qt::Unchecked);
-        }
+        if(planBusy)
+            return;
+        applyInclude();
+        const QList<int> retry = plan.retryBlocks();
+        for(const Mfc::WriteRow& row : plan.rows())
+            plan.select(row.block, retry.contains(row.block));
+        syncAll();
+        setStatus(retry.isEmpty()
+                  ? tr("Nothing to retry: only writes that never reported success are retried")
+                  : tr("%1 block(s) selected for retry").arg(retry.size()));
     });
     connect(stopButton, &QPushButton::clicked, &dialog, [&]() {
         cancelRequested = true;
     });
     connect(previewButton, &QPushButton::clicked, &dialog, [&]() {
+        if(planBusy)
+            return;
+        if(!plan.matches(doc, targetSession) || !documentMatchesTarget())
+        {
+            QMessageBox::information(&dialog, tr("Write plan"),
+                                     tr("The card changed; identify it again before previewing."));
+            return;
+        }
+        setBusy(true);
         cancelRequested = false;
-        for(int row = 0; row < table->rowCount(); row++)
+        plan.clearPreview();
+        syncAll();
+        for(int row = 0; row < plan.rows().size(); row++)
         {
             if(cancelRequested)
                 break;
             QApplication::processEvents();
-            const int block = table->item(row, 1)->data(Qt::UserRole).toInt();
+            const int block = plan.rows().at(row).block;
             const int sector = doc.spec().sectorOfBlock(block);
+            const bool isTrailer = doc.spec().isTrailerBlock(block);
             char keyType = 'A';
             QString key;
             if(!chooseVerifiedKey(sector, &keyType, &key))
             {
-                table->item(row, 5)->setText(tr("no verified key"));
-                table->item(row, 0)->setCheckState(Qt::Unchecked);
+                plan.setPreview(block, QString(), Mfc::PreviewState::NoKey,
+                                     tr("no key verified for sector %1").arg(sector));
+                syncRow(row);
                 continue;
             }
             QString cardHex;
             QString error;
             if(!readBlockOnce(block, keyType, key, &cardHex, &error))
             {
-                table->item(row, 5)->setText(tr("unreadable"));
-                table->item(row, 4)->setText(error);
-                table->item(row, 0)->setCheckState(Qt::Checked);
+                plan.setPreview(block, QString(), Mfc::PreviewState::Unreadable, error);
+                syncRow(row);
                 continue;
             }
-            table->item(row, 4)->setText(spacedHex(cardHex));
-            if(cardHex == doc.blockHex(block))
+            const QString documentHex = plan.source().blockHex(block);
+            if(!isTrailer)
             {
-                table->item(row, 5)->setText(tr("same"));
-                table->item(row, 0)->setCheckState(Qt::Unchecked);
+                const Mfc::PreviewState state = cardHex == documentHex
+                                                ? Mfc::PreviewState::Same : Mfc::PreviewState::Different;
+                plan.setPreview(block, cardHex, state,
+                                     state == Mfc::PreviewState::Same ? tr("identical") : tr("differs"));
+                syncRow(row);
+                continue;
             }
-            else if(cardHex.contains(QLatin1Char('?')))
-            {
-                table->item(row, 5)->setText(tr("partially unknown"));
-                table->item(row, 0)->setCheckState(Qt::Checked);
-            }
-            else
-            {
-                table->item(row, 5)->setText(tr("different"));
-                table->item(row, 0)->setCheckState(Qt::Checked);
-            }
+            // Trailer: Key A is masked, so compare the fields a read returns.
+            const QString cardAcl = cardHex.mid(12, 8);
+            const QString docAcl = documentHex.mid(12, 8);
+            QStringList differences;
+            if(cardAcl != docAcl)
+                differences << tr("access bits");
+            const bool keyBReadable = Mfc::TrailerAcl::keyBReadable(cardAcl);
+            if(keyBReadable && cardHex.mid(20, 12) != documentHex.mid(20, 12))
+                differences << tr("Key B");
+            const Mfc::PreviewState state = differences.isEmpty() ? Mfc::PreviewState::Same
+                                                                  : Mfc::PreviewState::Different;
+            QString note = differences.isEmpty()
+                           ? tr("readable fields match")
+                           : tr("differs: %1").arg(differences.join(QStringLiteral(", ")));
+            if(!keyBReadable)
+                note += tr("; Key B is not readable by the card");
+            plan.setPreview(block, cardHex, state, note);
+            syncRow(row);
         }
+        setBusy(false);
+        setStatus(tr("Preview finished; select the blocks to write"));
     });
 
     connect(writeButton, &QPushButton::clicked, &dialog, [&]() {
-        QList<int> selected;
-        for(int row = 0; row < table->rowCount(); row++)
-            if(table->item(row, 0)->checkState() == Qt::Checked)
-                selected.append(row);
+        if(planBusy)
+            return;
+        if(!plan.matches(doc, targetSession) || !documentMatchesTarget())
+        {
+            QMessageBox::information(&dialog, tr("Write plan"),
+                                     tr("The card changed; identify it again before writing."));
+            return;
+        }
+        applyInclude();
+        const QList<int> selected = plan.selectedBlocks();
         if(selected.isEmpty())
         {
             QMessageBox::information(&dialog, tr("Write plan"), tr("No block is selected."));
             return;
         }
-        if(QMessageBox::warning(&dialog, tr("Write plan"),
-                                tr("Write %1 block(s) to the card? This cannot be undone.")
-                                .arg(selected.size()),
-                                QMessageBox::Yes | QMessageBox::No) != QMessageBox::Yes)
+        // Re-validate the whole selection before the first command: the include
+        // options, the keys and the card may all have changed since selection.
+        for(int block : selected)
+        {
+            QString why;
+            if(!plan.blockAllowed(block, &why))
+            {
+                QMessageBox::information(&dialog, tr("Write plan"),
+                                         tr("Block %1 cannot be written: %2").arg(block).arg(why));
+                syncAll();
+                return;
+            }
+        }
+        if(confirmWrites
+           && QMessageBox::warning(&dialog, tr("Write plan"),
+                                   tr("Write %1 block(s) to the card? This cannot be undone.")
+                                   .arg(selected.size()),
+                                   QMessageBox::Yes | QMessageBox::No) != QMessageBox::Yes)
             return;
 
-        taskRunning = true;
+        setBusy(true);
         cancelRequested = false;
+        taskRunning = true;
         tracker.start(MfcRecovery::Method::KnownKeys, selected.size());
         setTaskRunning(true);
-        int written = 0;
+        int verified = 0;
+        int failed = 0;
+        int unverified = 0;
         QStringList failures;
-        for(int row : selected)
+        for(int block : selected)
         {
             if(cancelRequested)
                 break;
-            const int block = table->item(row, 1)->data(Qt::UserRole).toInt();
-            const QString hex = doc.blockHex(block);
-            QString error;
-            table->item(row, 5)->setText(tr("writing..."));
-            QApplication::processEvents();
-            if(writeBlockOnce(block, hex, &error))
+            if(!plan.matches(doc, targetSession) || !documentMatchesTarget())
             {
-                table->item(row, 5)->setText(tr("verified"));
-                written++;
+                logLine(tr("The card changed; the write plan was stopped"));
+                break;
+            }
+            QString why;
+            if(!plan.blockAllowed(block, &why))
+            {
+                plan.setOutcome(block, Mfc::WriteOutcome::Blocked, why);
+                syncAll();
+                continue;
+            }
+            const int row = plan.indexOfBlock(block);
+            if(row >= 0)
+                table->item(row, 5)->setText(tr("writing..."));
+            QApplication::processEvents();
+            const QString hex = doc.blockHex(block);
+            Mfc::TrailerPlan trailerPlan;
+            const Mfc::TrailerPlan* trailer = nullptr;
+            if(doc.spec().isTrailerBlock(block))
+            {
+                trailerPlan = plan.trailerPlan(block);
+                trailer = &trailerPlan;
+            }
+            QString detail;
+            const Mfc::WriteOutcome outcome = writeBlockOnce(block, hex, trailer, &detail);
+            plan.setOutcome(block, outcome, detail);
+            if(outcome == Mfc::WriteOutcome::Verified)
+            {
+                doc.setBlock(block, hex, Mfc::BlockState::Verified, targetSession);
+                verified++;
+            }
+            else if(outcome == Mfc::WriteOutcome::WrittenUnverified)
+            {
+                // Keep the payload as modified: the card may or may not carry
+                // it, and it must not be retried automatically.
+                doc.setBlock(block, hex, Mfc::BlockState::Modified, targetSession);
+                unverified++;
+                failures << tr("%1: %2").arg(block).arg(detail);
             }
             else
             {
-                table->item(row, 5)->setText(tr("failed"));
-                failures << QStringLiteral("%1: %2").arg(block).arg(error);
-                doc.setBlock(block, hex, Mfc::BlockState::Failed);
+                doc.setBlock(block, hex, Mfc::BlockState::Failed, targetSession);
+                failed++;
+                failures << tr("%1: %2").arg(block).arg(detail);
             }
+            syncAll();
             refreshSummary();
             QApplication::processEvents(QEventLoop::AllEvents, 20);
         }
         taskRunning = false;
         setTaskRunning(false);
+        setBusy(false);
         refreshDataTable();
         refreshKeyTable();
         refreshSummary();
         applyToMifare();
-        const QString message = tr("Write plan: %1 block(s) verified, %2 failed")
-                                .arg(written).arg(failures.size());
+        QString message = tr("Write plan: %1 verified, %2 failed, %3 need re-checking")
+                          .arg(verified).arg(failed).arg(unverified);
+        if(cancelRequested)
+            message += tr(" (stopped after the current block)");
         logLine(message);
         for(const QString& failure : failures)
             logLine(QStringLiteral("  ") + failure);
         setStatus(message);
+        plan.clearPreview();
+        syncAll();
         if(!failures.isEmpty())
             QMessageBox::information(&dialog, tr("Write plan"),
                                      message + QStringLiteral("\n\n") + failures.join(QStringLiteral("\n")));
     });
-    connect(closeButton, &QPushButton::clicked, &dialog, &QDialog::accept);
+    connect(closeButton, &QPushButton::clicked, &dialog, [&]() {
+        if(planBusy)
+        {
+            cancelRequested = true;
+            return;
+        }
+        dialog.accept();
+    });
 
     dialog.exec();
+    planBusy = false;
+    cancelRequested = false;
+    refreshSummary();
 }
 
 void MfcWorkbench::saveKeyFile()
@@ -1705,11 +2129,12 @@ void MfcWorkbench::readCardInfo()
     const QString clean = Util::stripAnsi(result.output);
     QRegularExpression uidRe(QStringLiteral("UID\\s*:?\\s*((?:[0-9A-Fa-f]{2}[ ]*){4,10})"));
     QRegularExpressionMatch uidMatch = uidRe.match(clean);
+    QString uid;
     if(uidMatch.hasMatch())
     {
-        QString uid = uidMatch.captured(1);
+        uid = uidMatch.captured(1);
         uid.remove(QRegularExpression(QStringLiteral("\\s")));
-        doc.uid = uid.toUpper();
+        uid = uid.toUpper();
     }
     QRegularExpression typeRe(QStringLiteral("MIFARE\\s+Classic\\s+(Mini|1K|2K|4K)"),
                               QRegularExpression::CaseInsensitiveOption);
@@ -1717,36 +2142,52 @@ void MfcWorkbench::readCardInfo()
     if(!typeMatch.hasMatch())
         typeMatch = QRegularExpression(QStringLiteral("MIFARE\\s+(Mini)\\b"),
                                        QRegularExpression::CaseInsensitiveOption).match(clean);
+    Mfc::CardType type = doc.cardType();
     if(typeMatch.hasMatch())
-    {
-        Mfc::CardType type = Mfc::CardType::M1K;
         Mfc::Spec::fromName(typeMatch.captured(1).toLower(), &type);
-        if(type != doc.cardType())
-        {
-            if(doc.completeBlockCount() > 0 || doc.verifiedKeyCount() > 0)
-            {
-                if(QMessageBox::question(this, tr("Card type"),
-                                         tr("The card is %1 but the document is %2. Change it?")
-                                         .arg(typeMatch.captured(1), doc.cardDisplayName()))
-                   != QMessageBox::Yes)
-                {
-                    refreshSummary();
-                    return;
-                }
-            }
-            doc.setCardType(type);
-            nonce = MfcRecovery::NonceType::Unknown;
-            updatingTables = true;
-            cardTypeBox->setCurrentIndex(cardTypeBox->findData(typeToInt(type)));
-            updatingTables = false;
-            emit documentTypeChanged(typeToInt(type));
-            refreshKeyTable();
-            refreshDataTable();
-            refreshAdvice();
-        }
+
+    if(uid.isEmpty())
+    {
+        setStatus(tr("No card answered; the document was not changed"));
+        refreshSummary();
+        return;
     }
+
+    QString error;
+    if(!applyCardIdentity(uid, type, &error))
+    {
+        // The document belongs to another card.  It is kept; the user decides
+        // whether to start a new one (and is offered a backup first).
+        QMessageBox box(this);
+        box.setWindowTitle(tr("Card changed"));
+        box.setText(error);
+        box.setInformativeText(tr("Keep the current document as a file before starting a new one? "
+                                  "Keys and blocks that were read from the other card are never "
+                                  "reused for this card."));
+        QPushButton* save = box.addButton(tr("Save document, then start new"), QMessageBox::AcceptRole);
+        QPushButton* start = box.addButton(tr("Start new document"), QMessageBox::AcceptRole);
+        box.addButton(QMessageBox::Cancel);
+        box.exec();
+        if(box.clickedButton() == save)
+            saveBackup();
+        if(box.clickedButton() == save || box.clickedButton() == start)
+        {
+            startNewDocumentForTarget(&error);
+            setStatus(tr("Card %1 identified; new document").arg(uid));
+        }
+        else
+        {
+            setStatus(tr("Card %1 identified; the document still belongs to another card").arg(uid));
+        }
+        refreshSummary();
+        return;
+    }
+
+    refreshKeyTable();
+    refreshDataTable();
+    refreshAdvice();
     refreshSummary();
-    setStatus(tr("Card identified"));
+    setStatus(tr("Card identified: %1").arg(uid));
 }
 
 void MfcWorkbench::diagnoseNonce()

@@ -72,7 +72,20 @@ MainWindow::MainWindow(QWidget *parent):
         statusBar()->showMessage(message, 10000);
     });
     connect(workbench, &MfcWorkbench::taskStateChanged, this, [this](bool running) {
-        setState(!running);
+        // A one-shot recovery task stops the persistent client, so the pages
+        // stay disabled until the user reconnects.
+        setState(!running && pm3state);
+    });
+    // One-shot client for commands that poll stdin, and the global channel
+    // ownership that keeps every page (Raw, Classic, workbench) blocked while a
+    // command may still be executing.
+    connect(util, &Util::isolatedRunRequested, this, &MainWindow::runIsolatedCommand);
+    connect(util, &Util::isolatedAbortRequested, this, &MainWindow::abortIsolatedCommand);
+    connect(util, &Util::channelStateChanged, this, [this](bool owned) {
+        if(owned)
+            setState(false);
+        else if(pm3state)
+            setState(true);
     });
 
     portSearchTimer = new QTimer(this);
@@ -92,6 +105,14 @@ MainWindow::MainWindow(QWidget *parent):
 
 MainWindow::~MainWindow()
 {
+    if(isolatedProcess != nullptr)
+    {
+        isolatedProcess->disconnect(this);
+        isolatedProcess->kill();
+        isolatedProcess->waitForFinished(2000);
+        delete isolatedProcess;
+        isolatedProcess = nullptr;
+    }
     // Stop the client before the widgets it reports to are destroyed.
     // The QProcess lives in pm3Thread, so killPM3() must run there. Use a
     // queued call with a bounded wait: a blocking invoke would hang forever if
@@ -199,6 +220,15 @@ void MainWindow::on_PM3_connectButton_clicked()
     if(connectInFlight)
     {
         qDebug() << "connect already in progress";
+        return;
+    }
+    if(util->isChannelOwned())
+    {
+        // A command still owns the client/device; a second client must not open
+        // the same serial port.
+        QMessageBox::information(this, tr("Info"),
+                                 tr("A command still owns the client. Wait for it to finish or "
+                                    "stop it before connecting again."), QMessageBox::Ok);
         return;
     }
     connectClickTimer.start();
@@ -319,6 +349,8 @@ void MainWindow::on_PM3_connectButton_clicked()
     // still starting up; on Windows both block the GUI/PM3 thread and make the
     // connect look slow. Scan stops now, the watchdog starts once we are connected.
     pendingPort = port;
+    lastClientPath = clientPath;
+    lastClientArgs = args;
     portSearchTimer->stop();
     setStatusBar(connectStatusBar, tr("Connecting..."));
     connectInFlight = true;
@@ -389,6 +421,96 @@ void MainWindow::onPM3StateChanged(bool st, const QString& info, quint64 attempt
         setStatusBar(PM3VersionBar, "");
         setStatusBar(connectStatusBar, tr("Not Connected"));
     }
+}
+
+void MainWindow::runIsolatedCommand(const QString& cmd, const QString& label)
+{
+    if(isolatedProcess != nullptr)
+    {
+        util->isolatedFinished(Util::EXEC_BUSY);
+        return;
+    }
+    if(lastClientPath.isEmpty())
+    {
+        util->isolatedFinished(Util::EXEC_NOT_RUNNING);
+        return;
+    }
+
+    // The persistent client owns the serial port; stop it before the one-shot
+    // client starts so two processes never open the same COM port.
+    if(pm3state)
+        on_PM3_disconnectButton_clicked();
+    if(pm3state)
+    {
+        util->isolatedFinished(Util::EXEC_BUSY);
+        return;
+    }
+    util->delay(300); // let the killed client release the port
+
+    QProcess* process = new QProcess(this);
+    isolatedProcess = process;
+    const quint64 runId = ++isolatedRunId;
+    process->setProcessChannelMode(QProcess::MergedChannels);
+    if(clientWorkingDir != nullptr && !clientWorkingDir->absolutePath().isEmpty())
+        process->setWorkingDirectory(clientWorkingDir->absolutePath());
+    if(!clientEnv.isEmpty())
+    {
+        QProcessEnvironment env;
+        for(const QString& entry : clientEnv)
+        {
+            const int eq = entry.indexOf(QLatin1Char('='));
+            if(eq > 0)
+                env.insert(entry.left(eq), entry.mid(eq + 1));
+        }
+        process->setProcessEnvironment(env);
+    }
+
+    connect(process, &QProcess::readyReadStandardOutput, this, [this, process]() {
+        util->processOutput(QString::fromLocal8Bit(process->readAllStandardOutput()));
+    });
+    connect(process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this,
+            [this, runId](int exitCode, QProcess::ExitStatus status) {
+        if(runId != isolatedRunId)
+            return;
+        finishIsolatedRun(exitCode, status);
+    });
+    connect(process, &QProcess::errorOccurred, this, [this, runId](QProcess::ProcessError error) {
+        if(runId != isolatedRunId)
+            return;
+        qWarning() << "one-shot client error:" << error;
+    });
+
+    QStringList args = lastClientArgs;
+    args << QStringLiteral("-c") << cmd;
+    setStatusBar(programStatusBar, tr("Running %1 in a one-shot client").arg(label));
+    qDebug() << "one-shot client:" << lastClientPath << args;
+    process->start(lastClientPath, args);
+}
+
+void MainWindow::abortIsolatedCommand()
+{
+    if(isolatedProcess == nullptr)
+    {
+        util->isolatedFinished(Util::EXEC_CANCELLED);
+        return;
+    }
+    isolatedProcess->kill();
+}
+
+void MainWindow::finishIsolatedRun(int exitCode, QProcess::ExitStatus status)
+{
+    QProcess* process = isolatedProcess;
+    isolatedProcess = nullptr;
+    if(process != nullptr)
+    {
+        util->processOutput(QString::fromLocal8Bit(process->readAllStandardOutput()));
+        process->deleteLater();
+    }
+    // The persistent client was stopped to free the port: stay disconnected and
+    // let the user reconnect explicitly.
+    const bool ok = status == QProcess::NormalExit && exitCode == 0;
+    qDebug() << "one-shot client finished: exit=" << exitCode << "status=" << status << "ok=" << ok;
+    util->isolatedFinished(ok ? Util::EXEC_OK : Util::EXEC_FAILED);
 }
 
 void MainWindow::on_PM3_disconnectButton_clicked()

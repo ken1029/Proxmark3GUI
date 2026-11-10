@@ -94,6 +94,9 @@ struct Block
 {
     QString hex;  // 32 chars, uppercase hex and '?'
     BlockState state = BlockState::Unknown;
+    // RF session (connection + card presence) that produced this payload.
+    // 0 means "not read from a card in a known session" (file, manual edit).
+    quint64 readSession = 0;
 
     bool complete() const;            // 16 real bytes
     bool known() const { return state != BlockState::Unknown && state != BlockState::Failed && !hex.isEmpty(); }
@@ -107,10 +110,36 @@ struct KeyEntry
     KeyState state = KeyState::Unknown;
     KeySource source = KeySource::None;
     QDateTime verifiedAt;
+    // RF session that authenticated this key.  A key verified in an earlier
+    // session stays in the document as history but is not evidence for the
+    // card that is in the field now.
+    quint64 verifiedSession = 0;
 
     bool hasValue() const { return value.size() == 12; }
     bool verified() const { return state == KeyState::Verified; }
+    bool verifiedIn(quint64 session) const { return verified() && session != 0 && verifiedSession == session; }
     void clear();
+};
+
+/*
+ * MIFARE Classic sector-trailer access conditions.
+ *
+ * The bit extraction and the permission table match the emulator model in
+ * armsrc/mifaresim.c (IsTrailerAccessAllowed), which is the same table the
+ * NXP MF1S50 datasheet defines.  "acl" is the 8 hex characters at bytes 6..9
+ * of a trailer block; only bytes 6..8 carry the conditions, byte 9 is GPB.
+ */
+struct TrailerAcl
+{
+    // True when bytes 6..8 form a valid complement pair (parity check).
+    static bool valid(const QString& acl);
+    // -1 when the three condition bytes are not a valid complement pair.
+    static int condition(const QString& acl);
+    static bool keyBReadable(const QString& acl);            // readable as data with Key A
+    static bool keyAWriteAllowed(const QString& acl, char authType);
+    static bool keyBWriteAllowed(const QString& acl, char authType);
+    static bool aclWriteAllowed(const QString& acl, char authType);
+    static bool aclReadable(const QString& acl, char authType);
 };
 
 struct IoResult
@@ -174,12 +203,14 @@ public:
     int blockCount() const { return m_spec.blockCount; }
     int sectorCount() const { return m_spec.sectorCount; }
     const Block& block(int index) const;
-    bool setBlock(int index, const QString& hex, BlockState state);
-    bool setBlockBytes(int index, const QByteArray& data, BlockState state);
+    bool setBlock(int index, const QString& hex, BlockState state, quint64 session = 0);
+    bool setBlockBytes(int index, const QByteArray& data, BlockState state, quint64 session = 0);
     bool setBlockState(int index, BlockState state);
     QString blockHex(int index) const;
     BlockState blockState(int index) const;
     bool blockComplete(int index) const;
+    // True only when the payload was read from the card in that RF session.
+    bool blockReadIn(int index, quint64 session) const;
     int completeBlockCount() const;
     int unknownBlockCount() const;
     int modifiedBlockCount() const;
@@ -187,9 +218,11 @@ public:
     // --- keys ---
     const KeyEntry& key(int sector, char type) const;
     bool setKey(int sector, char type, const QString& value, KeyState state, KeySource source);
-    bool setKeyVerified(int sector, char type, const QString& value, KeySource source);
+    bool setKeyVerified(int sector, char type, const QString& value, KeySource source, quint64 session = 0);
     bool setKeyEntry(int sector, char type, const KeyEntry& entry);
+    bool keyVerifiedIn(int sector, char type, quint64 session) const;
     int verifiedKeyCount() const;
+    int verifiedKeyCountIn(quint64 session) const;
     int pendingKeyCount() const;
     int unknownKeyCount() const;
     int keyCount() const { return m_spec.sectorCount * 2; }
@@ -222,7 +255,10 @@ public:
     // --- comparison / integrity ----------------------------------------
     CompareResult compare(const Document& other) const;
     QByteArray canonicalBytes() const;
+    // Hash of canonicalBytes(): the internal document digest, not a file digest.
     QString sha256() const;
+    // SHA-256 of the file on disk, for "<file>.sha256" sidecars.
+    static QString sha256OfFile(const QString& filename, QString* error = nullptr);
     QByteArray toJson() const;
 
 private:

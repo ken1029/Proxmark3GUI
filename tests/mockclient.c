@@ -26,6 +26,13 @@
  *   MOCK_EXIT_AFTER_VERSION "1" exit after the version block
  *   MOCK_HANDSHAKE_HANG   "1" never answer hw version
  *   MOCK_WRITE_MODE       ok (default), fail, silent, magic, emulator
+ *   MOCK_CHK_OUTPUT       "0" prints no key table for hf mf chk
+ *   MOCK_READ_HEX         block data returned by rdbl (32 hex chars)
+ *
+ * One-shot mode ("-c <command>") mirrors the real client: the command runs
+ * once, stdin is never read, and the process exit is the completion boundary.
+ * It never answers "rem" because nothing may be queued behind a command that
+ * polls stdin.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -161,12 +168,67 @@ static void print_read(void)
 {
     if (strcmp(env_or("MOCK_READ_MODE", "ok"), "silent") == 0)
         return;
-    emit_field(" 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f");
+    char line[128];
+    const char *hex = env_or("MOCK_READ_HEX", "000102030405060708090a0b0c0d0e0f");
+    int i;
+    char *out = line;
+    for (i = 0; i < 16 && hex[i * 2] != '\0' && hex[i * 2 + 1] != '\0'; i++) {
+        out += sprintf(out, "%c%c", hex[i * 2], hex[i * 2 + 1]);
+        if (i != 15)
+            *out++ = ' ';
+    }
+    *out = '\0';
+    emit_field(line);
 }
 
-int main(void)
+static void print_chk_table(void)
+{
+    if (strcmp(env_or("MOCK_CHK_OUTPUT", "1"), "0") == 0)
+        return;
+    emit_line("-----+-----+--------------+---+--------------+----");
+    emit_line(" Sec | Blk | key A        |res| key B        |res");
+    emit_line("-----+-----+--------------+---+--------------+----");
+    emit_line(" 000 | 003 | FFFFFFFFFFFF | D | 1234567890AB | D ");
+    emit_line(" 001 | 007 | A0A1A2A3A4A5 | H | BBBBBBBBBBBB | 0 ");
+    emit_line("-----+-----+--------------+---+--------------+----");
+}
+
+static void run_command(const char *command, const char *os)
+{
+    if (strcmp(command, "quit") == 0 || strcmp(command, "exit") == 0)
+        return;
+    if (strcmp(command, "hw version") == 0) {
+        print_version(os);
+    } else if (strncmp(command, "rem ", 4) == 0) {
+        unsigned delay = env_ms("MOCK_REM_DELAY_MS");
+        if (delay > 0)
+            sleep_ms(delay);
+        char marker[1100];
+        snprintf(marker, sizeof(marker), "[+] 2026-11-10T11:53:37Z remark: %s", command + 4);
+        emit_field(marker);
+    } else if (strstr(command, "chk") != NULL || strstr(command, "autopwn") != NULL) {
+        print_chk_table();
+    } else if (strstr(command, "wrbl") != NULL || strstr(command, "csetblk") != NULL
+               || strstr(command, "esetblk") != NULL) {
+        print_write(command);
+    } else if (strstr(command, "rdbl") != NULL || strstr(command, "getblk") != NULL) {
+        print_read();
+    } else {
+        emit_field("[-] unknown command");
+    }
+}
+
+int main(int argc, char **argv)
 {
     char line[1024];
+    const char *oneShot = NULL;
+    int i;
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-c") == 0 && i + 1 < argc) {
+            oneShot = argv[i + 1];
+            break;
+        }
+    }
     const int interactive = strcmp(env_or("MOCK_MODE", "pipe"), "interactive") == 0;
     const char *os = getenv("MOCK_OS_VERSION");
     if (os == NULL || strcmp(os, "offline") == 0)
@@ -189,6 +251,15 @@ int main(void)
         return 0;
 
     sleep_ms(env_ms("MOCK_STARTUP_DELAY_MS"));
+
+    if (oneShot != NULL) {
+        // One-shot client: one command, no stdin, exit status is the boundary.
+        emit_line("[=] Session log mock.log");
+        emit_line("[=] OFFLINE mode.");
+        emit_line(oneShot);
+        run_command(oneShot, os);
+        return 0;
+    }
 
     emit_line("[=] Session log mock.log");
     emit_line("[=] OFFLINE mode.");
@@ -220,12 +291,11 @@ int main(void)
             if (!flag("MOCK_HANDSHAKE_HANG"))
                 print_version(os);
         } else if (strncmp(line, "rem ", 4) == 0) {
-            unsigned delay = env_ms("MOCK_REM_DELAY_MS");
-            if (delay > 0)
-                sleep_ms(delay);
-            char marker[1100];
-            snprintf(marker, sizeof(marker), "[+] 2026-11-10T11:53:37Z remark: %s", line + 4);
-            emit_field(marker);
+            // A rem line is only ever consumed after the previous command
+            // returned: the real client executes it in its command loop.
+            run_command(line, os);
+        } else if (strstr(line, "chk") != NULL || strstr(line, "autopwn") != NULL) {
+            print_chk_table();
         } else if (strstr(line, "wrbl") != NULL || strstr(line, "csetblk") != NULL
                    || strstr(line, "esetblk") != NULL) {
             print_write(line);

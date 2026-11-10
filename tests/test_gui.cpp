@@ -1,6 +1,8 @@
 ﻿#include <QtTest>
 #include <cstdio>
+#include <QAbstractButton>
 #include <QCheckBox>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -23,7 +25,10 @@
 #include <QMessageBox>
 #include <QSettings>
 #include <QTranslator>
+#include <QDialog>
+#include <QPushButton>
 #include <QTabWidget>
+#include <QTableWidget>
 
 #ifndef SRCDIR
 #define SRCDIR "."
@@ -1784,7 +1789,9 @@ private slots:
 
         MfcRecovery::Command check = MfcRecovery::buildCheck(profile, spec, QString(), true);
         QCOMPARE(check.text, QString("hf mf chk --1k"));
-        QVERIFY(!check.usesStdin);
+        // The v4.23346 client polls stdin inside these commands, so they must
+        // run in a one-shot process instead of queueing a marker behind them.
+        QVERIFY(check.usesStdin);
         QCOMPARE(check.successPattern, QString());
         check = MfcRecovery::buildCheck(profile, spec, "dict.dic", false);
         QCOMPARE(check.text, QString("hf mf chk --1k -f \"dict.dic\" --no-default"));
@@ -1792,16 +1799,22 @@ private slots:
         MfcRecovery::Command autopwn = MfcRecovery::buildAutoPwn(profile, spec);
         QCOMPARE(autopwn.text, QString("hf mf autopwn --1k --ns"));
         QVERIFY(autopwn.hardTimeoutMs >= 30 * 60 * 1000);
+        QVERIFY(autopwn.usesStdin);
 
         MfcRecovery::Command nested = MfcRecovery::buildNested(profile, spec, false, 1, 'A', "FFFFFFFFFFFF");
         QCOMPARE(nested.text, QString("hf mf nested --1k --blk 7 -a -k FFFFFFFFFFFF"));
+        QVERIFY(nested.usesStdin);
 
         MfcRecovery::Command hard = MfcRecovery::buildHardnested(profile, spec, 0, 'A', "AAAAAAAAAAAA", 2, 'B');
         QCOMPARE(hard.text, QString("hf mf hardnested --blk 3 -a -k AAAAAAAAAAAA --tblk 11 --tb"));
+        QVERIFY(hard.usesStdin);
 
         QCOMPARE(MfcRecovery::buildDarkside(profile).text, QString("hf mf darkside"));
         QCOMPARE(MfcRecovery::buildSen(profile).text, QString("hf mf sen"));
         QCOMPARE(MfcRecovery::buildIsen(profile).text, QString("hf mf isen"));
+        QVERIFY(MfcRecovery::buildDarkside(profile).usesStdin);
+        QVERIFY(MfcRecovery::buildSen(profile).usesStdin);
+        QVERIFY(MfcRecovery::buildIsen(profile).usesStdin);
     }
 
 
@@ -1841,13 +1854,21 @@ private slots:
         QVERIFY(!util.isCommandActive());
     }
 
-    void asyncCommandCancelKeepsOutput()
+    // Cancel reports the result to the caller but keeps the client channel
+    // reserved: the client may still be executing the command, so no page may
+    // send another one (the old test expected the opposite and was wrong).
+    void cancelKeepsChannelOwned()
     {
         Util util;
         util.setRunningState(true);
         QSignalSpy finished(&util, &Util::commandFinished);
-        QSignalSpy abortSpy(&util, &Util::abortClientRequested);
-        QObject::connect(&util, &Util::write, &util, [&util](QString) {
+        QSignalSpy writeSpy(&util, &Util::write);
+        QSignalSpy ownedSpy(&util, &Util::channelStateChanged);
+        QString token;
+        QObject::connect(&util, &Util::write, &util, [&util, &token](QString wire) {
+            const int remPos = wire.indexOf("rem ");
+            if(remPos >= 0)
+                token = wire.mid(remPos + 4).trimmed();
             QTimer::singleShot(20, &util, [&util]() {
                 util.processOutput("[+] table row 000 | 003 | FFFFFFFFFFFF | 1\n");
             });
@@ -1857,19 +1878,197 @@ private slots:
         command.useCompletionMarker = true;
         command.hardTimeoutMs = 5000;
         QVERIFY(util.startCommand(command));
+        QVERIFY(!token.isEmpty());
         QTest::qWait(100);
         util.cancelCommand(false);
         QCOMPARE(finished.count(), 1);
         const Util::ExecResult result = finished.first().at(0).value<Util::ExecResult>();
         QCOMPARE(result.status, Util::EXEC_CANCELLED);
         QVERIFY(result.output.contains("table row"));
-        QCOMPARE(abortSpy.count(), 0);
+        QVERIFY(ownedSpy.count() >= 1);
 
+        // Still reserved: neither the workbench nor Raw may send anything.
+        QVERIFY(util.isChannelOwned());
+        QVERIFY(!util.startCommand(command));
+        QCOMPARE(util.execCMDWithResult("hf mf rdbl --blk 1", Util::ReturnTrigger(100)).status,
+                 Util::EXEC_BUSY);
+        util.execCMD("hf mf rdbl --blk 1");
+        QCOMPARE(writeSpy.count(), 1); // only the cancelled command reached the client
+
+        // The late completion boundary releases the channel.
+        util.processOutput("[+] 2026-11-10T11:53:37Z remark: " + token + "\n");
+        QTRY_VERIFY(!util.isChannelOwned());
+        QCOMPARE(writeSpy.count(), 1);
         QVERIFY(util.startCommand(command));
-        QTest::qWait(50);
         util.cancelCommand(true);
+    }
+
+    // Commands that poll stdin run in their own one-shot client: nothing may be
+    // queued behind them, and the process exit is the completion boundary.
+    void isolatedCommandUsesOneShotClient()
+    {
+        Util util;
+        util.setRunningState(true);
+        QSignalSpy finished(&util, &Util::commandFinished);
+        QSignalSpy writeSpy(&util, &Util::write);
+        QSignalSpy isolatedSpy(&util, &Util::isolatedRunRequested);
+        QSignalSpy abortSpy(&util, &Util::isolatedAbortRequested);
+        Util::AsyncCommand command;
+        command.cmd = "hf mf chk --1k";
+        command.isolated = true;
+        command.hardTimeoutMs = 5000;
+        QVERIFY(util.startCommand(command));
+        QCOMPARE(isolatedSpy.count(), 1);
+        QCOMPARE(isolatedSpy.first().at(0).toString(), QString("hf mf chk --1k"));
+        QCOMPARE(writeSpy.count(), 0); // no "rem" line is ever queued
+        QVERIFY(util.isChannelOwned());
+        util.processOutput("[+] table row 000 | 003 | FFFFFFFFFFFF | 1\n");
+        util.isolatedFinished(Util::EXEC_OK);
+        QCOMPARE(finished.count(), 1);
+        QCOMPARE(finished.first().at(0).value<Util::ExecResult>().status, Util::EXEC_OK);
+        QVERIFY(finished.first().at(0).value<Util::ExecResult>().output.contains("table row"));
+        QVERIFY(!util.isChannelOwned());
+
+        // Stopping a one-shot task kills the process; its exit releases the
+        // channel and the caller sees EXEC_CANCELLED.
+        QVERIFY(util.startCommand(command));
+        util.cancelCommand(false);
         QCOMPARE(abortSpy.count(), 1);
+        QVERIFY(util.isChannelOwned());
+        util.isolatedFinished(Util::EXEC_OK);
         QCOMPARE(finished.last().at(0).value<Util::ExecResult>().status, Util::EXEC_CANCELLED);
+        QVERIFY(!util.isChannelOwned());
+        QCOMPARE(writeSpy.count(), 0);
+    }
+
+    // Trailer access conditions come from the same table the firmware emulator
+    // uses; a masked or unreadable field is never treated as data.
+    void mfcTrailerAclRules()
+    {
+        // Transport configuration.  The firmware emulator (IsTrailerAccessAllowed)
+        // and the client dump code both treat condition 0..2 as "Key B is
+        // readable as data with Key A".
+        QVERIFY(Mfc::TrailerAcl::valid("FF078069"));
+        QCOMPARE(Mfc::TrailerAcl::condition("FF078069"), 1);
+        QVERIFY(Mfc::TrailerAcl::keyBReadable("FF078069"));
+        QVERIFY(Mfc::TrailerAcl::keyAWriteAllowed("FF078069", 'A'));
+        QVERIFY(!Mfc::TrailerAcl::keyAWriteAllowed("FF078069", 'B'));
+        QVERIFY(Mfc::TrailerAcl::aclWriteAllowed("FF078069", 'A'));
+        QVERIFY(Mfc::TrailerAcl::aclReadable("FF078069", 'A'));
+
+        QVERIFY(Mfc::TrailerAcl::valid("FF0F0000"));
+        QCOMPARE(Mfc::TrailerAcl::condition("FF0F0000"), 0);
+        QVERIFY(Mfc::TrailerAcl::keyBReadable("FF0F0000"));
+
+        QVERIFY(Mfc::TrailerAcl::valid("7F0F0800"));
+        QCOMPARE(Mfc::TrailerAcl::condition("7F0F0800"), 2);
+        QVERIFY(Mfc::TrailerAcl::keyBReadable("7F0F0800"));
+
+        // Condition 3: Key A is writable with Key B only, Key B is not readable.
+        QVERIFY(Mfc::TrailerAcl::valid("7F078800"));
+        QCOMPARE(Mfc::TrailerAcl::condition("7F078800"), 3);
+        QVERIFY(!Mfc::TrailerAcl::keyBReadable("7F078800"));
+        QVERIFY(Mfc::TrailerAcl::keyAWriteAllowed("7F078800", 'B'));
+        QVERIFY(!Mfc::TrailerAcl::keyAWriteAllowed("7F078800", 'A'));
+
+        QVERIFY(!Mfc::TrailerAcl::valid("FF078169")); // broken complement
+        QCOMPARE(Mfc::TrailerAcl::condition("FF078169"), -1);
+        QVERIFY(!Mfc::TrailerAcl::keyBReadable("????????????????"));
+        QVERIFY(!Mfc::TrailerAcl::keyAWriteAllowed("????????????????", 'A'));
+    }
+
+    // Verification evidence belongs to the RF session that produced it.
+    void mfcSessionScopedEvidence()
+    {
+        Mfc::Document doc(Mfc::CardType::M1K);
+        QVERIFY(doc.setKeyVerified(0, 'A', "FFFFFFFFFFFF", Mfc::KeySource::Manual, 7));
+        QVERIFY(doc.keyVerifiedIn(0, 'A', 7));
+        QVERIFY(!doc.keyVerifiedIn(0, 'A', 8));
+        QCOMPARE(doc.verifiedKeyCountIn(7), 1);
+        QCOMPARE(doc.verifiedKeyCountIn(8), 0);
+        QCOMPARE(doc.verifiedKeyCount(), 1); // history is kept
+
+        QVERIFY(doc.setBlock(1, "000102030405060708090A0B0C0D0E0F", Mfc::BlockState::Read, 7));
+        QVERIFY(doc.blockReadIn(1, 7));
+        QVERIFY(!doc.blockReadIn(1, 8));
+
+        // Editing a key drops its session evidence but keeps the value.
+        QVERIFY(doc.setKey(0, 'A', "FFFFFFFFFFFF", Mfc::KeyState::Pending, Mfc::KeySource::Manual));
+        QCOMPARE(doc.key(0, 'A').verifiedSession, quint64(0));
+        QCOMPARE(doc.verifiedKeyCountIn(7), 0);
+    }
+
+    // The write plan is the single gate for defaults, preview, manual ticks,
+    // retry and the commands that are actually sent.
+    void mfcWritePlanProtection()
+    {
+        Mfc::Document doc(Mfc::CardType::M1K);
+        const QString data = "000102030405060708090A0B0C0D0E0F";
+        const QString trailer = QStringLiteral("FFFFFFFFFFFF") + "FF078069" + QStringLiteral("FFFFFFFFFFFF");
+        QVERIFY(doc.setBlock(0, "A1A2A3A4B5B6B7B8B9BABBBCBDBEBF00", Mfc::BlockState::Read, 5));
+        QVERIFY(doc.setBlock(1, data, Mfc::BlockState::Read, 5));
+        QVERIFY(doc.setBlock(2, data, Mfc::BlockState::Read, 5));
+        QVERIFY(doc.setBlock(3, trailer, Mfc::BlockState::Read, 5));
+        QVERIFY(doc.setKeyVerified(0, 'A', "FFFFFFFFFFFF", Mfc::KeySource::Manual, 5));
+
+        Mfc::WritePlan plan;
+        plan.reset(doc, 5);
+        QCOMPARE(plan.rows().size(), 4);
+        QVERIFY(plan.matches(doc, 5));
+        QVERIFY(!plan.matches(doc, 6));
+
+        QString reason;
+        QVERIFY(!plan.select(0, true, &reason));
+        QVERIFY(reason.contains("Block 0"));
+        QVERIFY(!plan.select(3, true, &reason));
+        QVERIFY(reason.contains("trailer", Qt::CaseInsensitive));
+        QVERIFY(plan.select(1, true, &reason));
+        QCOMPARE(plan.selectedBlocks(), QList<int>({1}));
+
+        // Allowing block 0 is not the same as selecting it; the row still has
+        // to pass the policy check when it is ticked.
+        plan.setIncludeBlock0(true);
+        QVERIFY(plan.blockAllowed(0));
+        QCOMPARE(plan.selectedBlocks(), QList<int>({1}));
+
+        // A trailer needs a preview: the access conditions on the card decide
+        // whether the write is allowed at all.
+        plan.setIncludeTrailers(true);
+        QVERIFY(!plan.blockAllowed(3, &reason));
+        QVERIFY(reason.contains("preview", Qt::CaseInsensitive));
+        const QString cardTrailer = QStringLiteral("000000000000") + "FF078069" + QStringLiteral("000000000000");
+        plan.setPreview(3, cardTrailer, Mfc::PreviewState::Different, "differs");
+        QVERIFY(plan.blockAllowed(3, &reason));
+        QVERIFY(plan.isSelected(3));
+        const Mfc::TrailerPlan trailerPlan = plan.trailerPlan(3);
+        QVERIFY(trailerPlan.valid);
+        QCOMPARE(trailerPlan.writeKeyType, 'A');
+        QVERIFY(trailerPlan.verify.checkAcl);
+        QVERIFY(trailerPlan.verify.checkKeyB); // Key B is readable under FF078069
+
+        // An unreadable preview is never "safe to write".
+        plan.setPreview(3, QString(), Mfc::PreviewState::Unreadable, "timeout");
+        QVERIFY(!plan.isSelected(3));
+        QVERIFY(!plan.blockAllowed(3));
+
+        // Retry only re-selects writes that never reported success.
+        plan.setOutcome(1, Mfc::WriteOutcome::WriteFailed, "x");
+        plan.setOutcome(2, Mfc::WriteOutcome::WrittenUnverified, "x");
+        QCOMPARE(plan.retryBlocks(), QList<int>({1}));
+        QVERIFY(plan.anyWrittenUnverified());
+        QVERIFY(Mfc::retryable(Mfc::WriteOutcome::WriteFailed));
+        QVERIFY(!Mfc::retryable(Mfc::WriteOutcome::WrittenUnverified));
+        QVERIFY(!Mfc::retryable(Mfc::WriteOutcome::Mismatch));
+
+        // No key verified in this session means no write at all.
+        Mfc::Document historical = doc;
+        QVERIFY(historical.setKey(0, 'A', "FFFFFFFFFFFF", Mfc::KeyState::Pending, Mfc::KeySource::Manual));
+        Mfc::WritePlan second;
+        second.reset(historical, 5);
+        QVERIFY(!second.blockAllowed(1, &reason));
+        QVERIFY(reason.contains("no key verified"));
+        QVERIFY(!second.select(1, true, &reason));
+        QVERIFY(second.selectedBlocks().isEmpty());
     }
 
     void workbenchRunsDictionaryTask()
@@ -1889,35 +2088,320 @@ private slots:
         QVERIFY(workbench != nullptr);
         QVERIFY(util != nullptr);
 
-        util->setRunningState(true);
-        QObject::connect(util, &Util::write, util, [util](QString wire) {
-            const int remPos = wire.indexOf("rem ");
-            const QString token = remPos >= 0 ? wire.mid(remPos + 4).trimmed() : QString();
-            QTimer::singleShot(30, util, [util, token]() {
-                util->processOutput("-----+-----+--------------+---+--------------+----\n"
-                                    " Sec | Blk | key A        |res| key B        |res\n"
-                                    "-----+-----+--------------+---+--------------+----\n"
-                                    " 000 | 003 | FFFFFFFFFFFF | D | 1234567890AB | D \n"
-                                    " 001 | 007 | A0A1A2A3A4A5 | H | BBBBBBBBBBBB | 0 \n"
-                                    "-----+-----+--------------+---+--------------+----\n");
-                util->processOutput("[+] remark: " + token + "\n");
-            });
-        });
+        // The one-shot runner is a real process: point it at the mock client.
+        window.lastClientPath = makeMockClient(dir.path(), "v4.23346-suspect");
+        QVERIFY(!window.lastClientPath.isEmpty());
+        window.clientWorkingDir->setPath(dir.path());
 
+        util->setRunningState(true);
+        QSignalSpy writeSpy(util, &Util::write);
+        QSignalSpy isolatedSpy(util, &Util::isolatedRunRequested);
         workbench->setDeviceReady(true);
+        QString error;
+        QVERIFY2(workbench->applyCardIdentity("A1A2A3A4", Mfc::CardType::M1K, &error), qPrintable(error));
+        const quint64 session = workbench->activeSession();
+
         QComboBox* methodBox = workbench->findChild<QComboBox*>("mfcMethodBox");
         QVERIFY(methodBox != nullptr);
         methodBox->setCurrentIndex(methodBox->findText("Dictionary (chk)"));
         QVERIFY(QMetaObject::invokeMethod(workbench, "runSelectedMethod"));
 
+        // chk polls stdin in the client: it runs in a one-shot process and no
+        // "rem" line is queued behind it.
+        QCOMPARE(isolatedSpy.count(), 1);
+        QVERIFY(writeSpy.isEmpty());
+        QVERIFY(workbench->isTaskActive());
+
         QElapsedTimer timer;
         timer.start();
-        while(workbench->isTaskActive() && timer.elapsed() < 3000)
+        while(workbench->isTaskActive() && timer.elapsed() < 10000)
             QTest::qWait(20);
         QVERIFY(!workbench->isTaskActive());
         QCOMPARE(workbench->document().key(0, 'A').state, Mfc::KeyState::Verified);
         QCOMPARE(workbench->document().key(0, 'B').state, Mfc::KeyState::Verified);
         QCOMPARE(workbench->document().key(1, 'B').state, Mfc::KeyState::Unknown);
+        QCOMPARE(workbench->document().key(0, 'A').verifiedSession, session);
+        QVERIFY(!util->isChannelOwned());
+        util->setRunningState(false);
+        QDir::setCurrent(oldCwd);
+    }
+
+    // A card change keeps the old document but never lets its blocks or keys
+    // pass as evidence for the card in the field.
+    void workbenchRequiresCardIdentity()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString oldCwd = QDir::currentPath();
+        QDir::setCurrent(dir.path());
+        QSettings settings("GUIsettings.ini", QSettings::IniFormat);
+        settings.setValue("language/name", "en_US");
+        settings.sync();
+
+        MainWindow window;
+        window.initUI();
+        MfcWorkbench* workbench = window.findChild<MfcWorkbench*>("mfcWorkbench");
+        QVERIFY(workbench != nullptr);
+        workbench->setDeviceReady(true);
+        QVERIFY(workbench->activeSession() != 0);
+        QVERIFY(!workbench->documentMatchesTarget());
+
+        QString error;
+        QVERIFY2(workbench->applyCardIdentity("A1A2A3A4", Mfc::CardType::M1K, &error), qPrintable(error));
+        QCOMPARE(workbench->document().uid, QString("A1A2A3A4"));
+        QVERIFY(workbench->documentMatchesTarget());
+
+        Mfc::Document& document = workbench->document();
+        document.setBlock(1, "000102030405060708090A0B0C0D0E0F", Mfc::BlockState::Read,
+                          workbench->activeSession());
+        document.setKeyVerified(0, 'A', "FFFFFFFFFFFF", Mfc::KeySource::Manual,
+                                workbench->activeSession());
+
+        // Same capacity, different UID: the document is not adopted.
+        QVERIFY(!workbench->applyCardIdentity("B1B2B3B4", Mfc::CardType::M1K, &error));
+        QVERIFY(!error.isEmpty());
+        QCOMPARE(workbench->document().uid, QString("A1A2A3A4"));
+        QVERIFY(!workbench->documentMatchesTarget());
+        QCOMPARE(workbench->document().completeBlockCount(), 1);
+
+        // A new document binds to the card in the field and starts empty.
+        QVERIFY2(workbench->startNewDocumentForTarget(&error), qPrintable(error));
+        QCOMPARE(workbench->document().uid, QString("B1B2B3B4"));
+        QCOMPARE(workbench->document().completeBlockCount(), 0);
+        QCOMPARE(workbench->document().verifiedKeyCount(), 0);
+        QVERIFY(workbench->documentMatchesTarget());
+
+        // Reconnect: the same card is identified again, but the verification
+        // from the previous session is history, not evidence.
+        workbench->document().setKeyVerified(0, 'A', "FFFFFFFFFFFF", Mfc::KeySource::Manual,
+                                             workbench->activeSession());
+        const quint64 firstSession = workbench->activeSession();
+        workbench->setDeviceReady(false);
+        QVERIFY(!workbench->hasTarget());
+        workbench->setDeviceReady(true);
+        QVERIFY(workbench->activeSession() != firstSession);
+        QVERIFY(!workbench->documentMatchesTarget());
+        QVERIFY2(workbench->applyCardIdentity("B1B2B3B4", Mfc::CardType::M1K, &error), qPrintable(error));
+        QVERIFY(workbench->documentMatchesTarget());
+        QCOMPARE(workbench->document().verifiedKeyCount(), 1);
+        QCOMPARE(workbench->document().verifiedKeyCountIn(workbench->activeSession()), 0);
+        QDir::setCurrent(oldCwd);
+    }
+
+    // The backup sidecar has to describe the bytes on disk, not the internal
+    // document digest.
+    void workbenchBackupSidecarHashesFile()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString oldCwd = QDir::currentPath();
+        QDir::setCurrent(dir.path());
+        QSettings settings("GUIsettings.ini", QSettings::IniFormat);
+        settings.setValue("language/name", "en_US");
+        settings.sync();
+
+        MainWindow window;
+        window.initUI();
+        MfcWorkbench* workbench = window.findChild<MfcWorkbench*>("mfcWorkbench");
+        QVERIFY(workbench != nullptr);
+        workbench->document().setBlock(1, "000102030405060708090A0B0C0D0E0F",
+                                       Mfc::BlockState::Read, 0);
+
+        for(const QString& name : {QStringLiteral("backup.json"), QStringLiteral("backup.eml"),
+                                   QStringLiteral("backup.bin")})
+        {
+            const QString path = dir.filePath(name);
+            QString error;
+            QVERIFY2(workbench->saveBackupTo(path, &error, true), qPrintable(error));
+
+            QFile data(path);
+            QVERIFY(data.open(QFile::ReadOnly));
+            const QByteArray bytes = data.readAll();
+            data.close();
+            QVERIFY(!bytes.isEmpty());
+
+            QFile sidecar(path + ".sha256");
+            QVERIFY(sidecar.open(QFile::ReadOnly | QFile::Text));
+            const QString text = QString::fromUtf8(sidecar.readAll()).trimmed();
+            sidecar.close();
+            const QStringList parts = text.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
+            QCOMPARE(parts.size(), 2);
+            QCOMPARE(parts.at(0),
+                     QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex()));
+            QCOMPARE(parts.at(1), QFileInfo(path).fileName());
+        }
+        // The internal digest still exists, but it is a different value.
+        QCOMPARE(workbench->document().sha256().size(), 64);
+        QDir::setCurrent(oldCwd);
+    }
+
+    // Unchecking the include options is not a hint: the preview, a manual tick
+    // and the write loop all go through the write plan, so no protected block
+    // ever reaches the client.
+    void workbenchWritePlanProtectsBlocks()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString oldCwd = QDir::currentPath();
+        QDir::setCurrent(dir.path());
+        QSettings settings("GUIsettings.ini", QSettings::IniFormat);
+        settings.setValue("language/name", "en_US");
+        settings.sync();
+
+        MainWindow window;
+        window.initUI();
+        MfcWorkbench* workbench = window.findChild<MfcWorkbench*>("mfcWorkbench");
+        Util* util = window.findChild<Util*>();
+        QVERIFY(workbench != nullptr);
+        QVERIFY(util != nullptr);
+        workbench->setConfirmWrites(false);
+
+        util->setRunningState(true);
+        workbench->setDeviceReady(true);
+        QString error;
+        QVERIFY2(workbench->applyCardIdentity("A1A2A3A4", Mfc::CardType::M1K, &error), qPrintable(error));
+        Mfc::Document& doc = workbench->document();
+        const quint64 session = workbench->activeSession();
+        const QString data = "000102030405060708090A0B0C0D0E0F";
+        doc.setBlock(0, "A1A2A3A4B5B6B7B8B9BABBBCBDBEBF00", Mfc::BlockState::Read, session);
+        doc.setBlock(1, data, Mfc::BlockState::Read, session);
+        doc.setBlock(2, data, Mfc::BlockState::Read, session);
+        doc.setBlock(3, QStringLiteral("FFFFFFFFFFFF") + "FF078069" + QStringLiteral("FFFFFFFFFFFF"),
+                     Mfc::BlockState::Read, session);
+        doc.setKeyVerified(0, 'A', "FFFFFFFFFFFF", Mfc::KeySource::Manual, session);
+
+        QStringList commands;
+        QString cardReadHex = "aabbccddeeff00112233445566778899";
+        QObject::connect(util, &Util::write, util, [util, &commands, &cardReadHex](QString wire) {
+            commands << wire;
+            const int remPos = wire.indexOf("rem ");
+            const QString token = remPos >= 0 ? wire.mid(remPos + 4).trimmed() : QString();
+            QTimer::singleShot(5, util, [util, token, wire, cardReadHex]() {
+                if(wire.contains("rdbl"))
+                {
+                    QString spaced;
+                    for(int i = 0; i < cardReadHex.size(); i += 2)
+                        spaced += (spaced.isEmpty() ? QString() : QStringLiteral(" "))
+                                  + cardReadHex.mid(i, 2);
+                    util->processOutput(spaced + "\n");
+                }
+                else if(wire.contains("wrbl"))
+                    util->processOutput("[+] Write ( ok )\n");
+                if(!token.isEmpty())
+                    util->processOutput("[+] remark: " + token + "\n");
+            });
+        });
+
+        bool manualTickStuck = false;
+        bool trailerTickStuck = false;
+        bool timedOut = false;
+
+        // Drive the modal dialog: preview (optional), manual ticks, write
+        // (optional), close.  No message box may appear: the write confirmation
+        // is disabled and every fixture answer keeps the outcome verified.
+        auto runPlanDialog = [&](bool withPreview, bool withWrite) -> bool {
+            QTableWidget* table = nullptr;
+            QPushButton* preview = nullptr;
+            QPushButton* write = nullptr;
+            QPushButton* close = nullptr;
+            int step = 0;
+            int ticks = 0;
+            QTimer driver;
+            driver.setInterval(20);
+            QObject::connect(&driver, &QTimer::timeout, [&]() {
+                if(++ticks > 1500)
+                {
+                    timedOut = true;
+                    driver.stop();
+                    if(QDialog* dlg = window.findChild<QDialog*>("mfcWritePlanDialog"))
+                        dlg->reject();
+                    return;
+                }
+                if(table == nullptr)
+                {
+                    table = window.findChild<QTableWidget*>("mfcWriteTable");
+                    preview = window.findChild<QPushButton*>("mfcWritePreview");
+                    write = window.findChild<QPushButton*>("mfcWriteWrite");
+                    close = window.findChild<QPushButton*>("mfcWriteClose");
+                    if(table == nullptr || preview == nullptr || write == nullptr || close == nullptr)
+                        return;
+                }
+                if(!preview->isEnabled())
+                    return; // a task is running
+                switch(step)
+                {
+                case 0:
+                    if(withPreview)
+                    {
+                        preview->click();
+                        step = 1;
+                        return;
+                    }
+                    step = 2;
+                    return;
+                case 1:
+                    // Both include options are off: a manual tick may not stick.
+                    table->item(0, 0)->setCheckState(Qt::Checked);
+                    manualTickStuck = manualTickStuck || table->item(0, 0)->checkState() == Qt::Checked;
+                    table->item(3, 0)->setCheckState(Qt::Checked);
+                    trailerTickStuck = trailerTickStuck || table->item(3, 0)->checkState() == Qt::Checked;
+                    step = 2;
+                    return;
+                case 2:
+                    if(withWrite)
+                    {
+                        if(!write->isEnabled())
+                            return;
+                        write->click();
+                        step = 3;
+                        return;
+                    }
+                    step = 3;
+                    return;
+                case 3:
+                    close->click();
+                    driver.stop();
+                    return;
+                default:
+                    return;
+                }
+            });
+            driver.start();
+            const bool invoked = QMetaObject::invokeMethod(workbench, "writePlan");
+            driver.stop();
+            return invoked && !timedOut;
+        };
+
+        // 1) Preview with a card that differs: only ordinary blocks may be
+        //    selected, and a manual tick on Block 0 / the trailer is refused.
+        commands.clear();
+        QVERIFY(runPlanDialog(true, false));
+        QVERIFY2(!manualTickStuck, "a manual tick must not select protected Block 0");
+        QVERIFY2(!trailerTickStuck, "a manual tick must not select a protected trailer");
+        QVERIFY(!workbench->currentWritePlan().isSelected(0));
+        QVERIFY(!workbench->currentWritePlan().isSelected(3));
+        for(const QString& wire : commands)
+            QVERIFY2(!wire.contains("wrbl"), qPrintable(wire)); // preview only
+
+        // 2) Write: the read-back matches, so blocks 1 and 2 are the only
+        //    commands the client sees.
+        cardReadHex = data;
+        commands.clear();
+        QVERIFY(runPlanDialog(false, true));
+        QVERIFY(!commands.isEmpty());
+        int writes = 0;
+        for(const QString& wire : commands)
+        {
+            if(!wire.contains("wrbl"))
+                continue;
+            writes++;
+            QVERIFY2(!wire.contains("--blk 0 "), qPrintable(wire));
+            QVERIFY2(!wire.contains("--blk 3 "), qPrintable(wire));
+        }
+        QCOMPARE(writes, 2);
+        QCOMPARE(doc.blockState(1), Mfc::BlockState::Verified);
+        QCOMPARE(doc.blockState(2), Mfc::BlockState::Verified);
+        QVERIFY(!util->isChannelOwned());
         util->setRunningState(false);
         QDir::setCurrent(oldCwd);
     }

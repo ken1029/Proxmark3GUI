@@ -223,6 +223,80 @@ void Block::clear()
 {
     hex.clear();
     state = BlockState::Unknown;
+    readSession = 0;
+}
+
+// ---------------------------------------------------------------- TrailerAcl
+
+bool TrailerAcl::valid(const QString& acl)
+{
+    const QString text = acl.left(6).toUpper();
+    if(text.size() != 6)
+        return false;
+    for(const QChar c : text)
+        if(!((c >= QLatin1Char('0') && c <= QLatin1Char('9'))
+             || (c >= QLatin1Char('A') && c <= QLatin1Char('F'))))
+            return false;
+    // byte6 = ~C2 | ~C1, byte7 = C1 | ~C3, byte8 = C3 | C2
+    const quint8 b6 = quint8(text.mid(0, 2).toUInt(nullptr, 16));
+    const quint8 b7 = quint8(text.mid(2, 2).toUInt(nullptr, 16));
+    const quint8 b8 = quint8(text.mid(4, 2).toUInt(nullptr, 16));
+    const quint8 nc2 = quint8(b6 >> 4);
+    const quint8 nc1 = quint8(b6 & 0x0F);
+    const quint8 c1 = quint8(b7 >> 4);
+    const quint8 nc3 = quint8(b7 & 0x0F);
+    const quint8 c3 = quint8(b8 >> 4);
+    const quint8 c2 = quint8(b8 & 0x0F);
+    return (nc1 == (c1 ^ 0x0F)) && (nc2 == (c2 ^ 0x0F)) && (nc3 == (c3 ^ 0x0F));
+}
+
+int TrailerAcl::condition(const QString& acl)
+{
+    // Bytes 6..8, same extraction as armsrc/mifaresim.c IsTrailerAccessAllowed.
+    if(!valid(acl))
+        return -1;
+    const QString text = acl.left(6).toUpper();
+    const quint8 byte7 = quint8(text.mid(2, 2).toUInt(nullptr, 16));
+    const quint8 byte8 = quint8(text.mid(4, 2).toUInt(nullptr, 16));
+    return int(((byte7 >> 5) & 0x04) | ((byte8 >> 2) & 0x02) | ((byte8 >> 7) & 0x01));
+}
+
+bool TrailerAcl::keyBReadable(const QString& acl)
+{
+    const int ac = condition(acl);
+    return ac == 0x00 || ac == 0x01 || ac == 0x02;
+}
+
+bool TrailerAcl::keyAWriteAllowed(const QString& acl, char authType)
+{
+    const int ac = condition(acl);
+    if(ac < 0)
+        return false;
+    const bool byA = authType == 'A' || authType == 'a';
+    return byA ? (ac == 0x00 || ac == 0x01) : (ac == 0x03 || ac == 0x04);
+}
+
+bool TrailerAcl::keyBWriteAllowed(const QString& acl, char authType)
+{
+    return keyAWriteAllowed(acl, authType);
+}
+
+bool TrailerAcl::aclWriteAllowed(const QString& acl, char authType)
+{
+    const int ac = condition(acl);
+    if(ac < 0)
+        return false;
+    const bool byA = authType == 'A' || authType == 'a';
+    return byA ? (ac == 0x01) : (ac == 0x03 || ac == 0x05);
+}
+
+bool TrailerAcl::aclReadable(const QString& acl, char authType)
+{
+    const int ac = condition(acl);
+    if(ac < 0)
+        return false;
+    const bool byA = authType == 'A' || authType == 'a';
+    return byA || !(ac == 0x00 || ac == 0x01 || ac == 0x02);
 }
 
 // ---------------------------------------------------------------- KeyEntry
@@ -233,6 +307,7 @@ void KeyEntry::clear()
     state = KeyState::Unknown;
     source = KeySource::None;
     verifiedAt = QDateTime();
+    verifiedSession = 0;
 }
 
 // ---------------------------------------------------------------- Document
@@ -279,7 +354,7 @@ const Block& Document::block(int index) const
     return m_blocks.at(index);
 }
 
-bool Document::setBlock(int index, const QString& hex, BlockState state)
+bool Document::setBlock(int index, const QString& hex, BlockState state, quint64 session)
 {
     if(index < 0 || index >= m_blocks.size())
         return false;
@@ -294,14 +369,15 @@ bool Document::setBlock(int index, const QString& hex, BlockState state)
     m_blocks[index].hex = normalized;
     m_blocks[index].state = (normalized.isEmpty() || normalized.count(QLatin1Char('?')) == 32)
                             ? BlockState::Unknown : state;
+    m_blocks[index].readSession = m_blocks[index].state == BlockState::Unknown ? 0 : session;
     return true;
 }
 
-bool Document::setBlockBytes(int index, const QByteArray& data, BlockState state)
+bool Document::setBlockBytes(int index, const QByteArray& data, BlockState state, quint64 session)
 {
     if(data.size() != 16)
         return false;
-    return setBlock(index, QString::fromLatin1(data.toHex().toUpper()), state);
+    return setBlock(index, QString::fromLatin1(data.toHex().toUpper()), state, session);
 }
 
 bool Document::setBlockState(int index, BlockState state)
@@ -325,6 +401,12 @@ BlockState Document::blockState(int index) const
 bool Document::blockComplete(int index) const
 {
     return block(index).complete();
+}
+
+bool Document::blockReadIn(int index, quint64 session) const
+{
+    const Block& b = block(index);
+    return session != 0 && b.readSession == session && b.complete();
 }
 
 int Document::completeBlockCount() const
@@ -370,12 +452,25 @@ bool Document::setKey(int sector, char type, const QString& value, KeyState stat
     entry.state = normalized.isEmpty() ? KeyState::Unknown : state;
     entry.source = normalized.isEmpty() ? KeySource::None : source;
     entry.verifiedAt = entry.state == KeyState::Verified ? QDateTime::currentDateTimeUtc() : QDateTime();
+    if(entry.state != KeyState::Verified)
+        entry.verifiedSession = 0;
     return true;
 }
 
-bool Document::setKeyVerified(int sector, char type, const QString& value, KeySource source)
+bool Document::setKeyVerified(int sector, char type, const QString& value, KeySource source, quint64 session)
 {
-    return setKey(sector, type, value, KeyState::Verified, source);
+    const bool ok = setKey(sector, type, value, KeyState::Verified, source);
+    if(ok && session != 0 && sector >= 0 && sector < m_spec.sectorCount)
+    {
+        KeyEntry& entry = (type == 'B' || type == 'b') ? m_keyB[sector] : m_keyA[sector];
+        entry.verifiedSession = session;
+    }
+    return ok;
+}
+
+bool Document::keyVerifiedIn(int sector, char type, quint64 session) const
+{
+    return session != 0 && key(sector, type).verifiedIn(session);
 }
 
 bool Document::setKeyEntry(int sector, char type, const KeyEntry& entry)
@@ -399,6 +494,20 @@ int Document::verifiedKeyCount() const
             count++;
     for(const KeyEntry& k : m_keyB)
         if(k.verified())
+            count++;
+    return count;
+}
+
+int Document::verifiedKeyCountIn(quint64 session) const
+{
+    if(session == 0)
+        return 0;
+    int count = 0;
+    for(const KeyEntry& k : m_keyA)
+        if(k.verifiedIn(session))
+            count++;
+    for(const KeyEntry& k : m_keyB)
+        if(k.verifiedIn(session))
             count++;
     return count;
 }
@@ -1399,6 +1508,25 @@ QByteArray Document::canonicalBytes() const
 QString Document::sha256() const
 {
     return QString::fromLatin1(QCryptographicHash::hash(canonicalBytes(), QCryptographicHash::Sha256).toHex());
+}
+
+QString Document::sha256OfFile(const QString& filename, QString* error)
+{
+    QFile file(filename);
+    if(!file.open(QIODevice::ReadOnly))
+    {
+        if(error != nullptr)
+            *error = QStringLiteral("cannot open %1: %2").arg(filename, file.errorString());
+        return QString();
+    }
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    if(!hash.addData(&file))
+    {
+        if(error != nullptr)
+            *error = QStringLiteral("cannot read %1: %2").arg(filename, file.errorString());
+        return QString();
+    }
+    return QString::fromLatin1(hash.result().toHex());
 }
 
 } // namespace Mfc

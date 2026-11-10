@@ -34,6 +34,7 @@ SOURCES += \
     ../src/module/mifare.cpp \
     ../src/module/mfcdocument.cpp \
     ../src/module/mfckeyrecovery.cpp \
+    ../src/module/mfcwriteplan.cpp \
     ../src/module/t55xxtab.cpp \
     ../src/ui/mainwindow.cpp \
     ../src/ui/mfcworkbench.cpp \
@@ -52,6 +53,7 @@ HEADERS += \
     ../src/module/mifare.h \
     ../src/module/mfcdocument.h \
     ../src/module/mfckeyrecovery.h \
+    ../src/module/mfcwriteplan.h \
     ../src/module/t55xxtab.h \
     ../src/ui/mainwindow.h \
     ../src/ui/mfcworkbench.h \

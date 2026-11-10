@@ -103,8 +103,10 @@ struct MergeResult
 
 // Merge only into the sectors named by the candidates.  A verified key is never
 // overwritten by an empty or unverified value; conflicts are reported.
+// session is the RF session that produced the table: a recovered key is only
+// marked verified for that session.
 MergeResult merge(const ParseResult& parsed, Mfc::Document* document,
-                  bool markVerified, Mfc::KeySource fallbackSource);
+                  bool markVerified, Mfc::KeySource fallbackSource, quint64 session = 0);
 
 // Last recognisable phase in the accumulated output.
 QString detectStage(const QString& cleanOutput);
@@ -119,6 +121,10 @@ struct Command
     QString text;
     QString successPattern;
     QString failurePattern;
+    // The v4.23346 client calls kbd_enter_pressed() while this command runs
+    // (hf mf chk, autopwn, nested, darkside, sen), so the command must run in
+    // its own one-shot client process: a "rem" line queued behind it on the
+    // pipe would be consumed as a key press and abort it.
     bool usesStdin = false;
     qint64 hardTimeoutMs = 30 * 60 * 1000;
 };

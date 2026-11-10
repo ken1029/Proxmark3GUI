@@ -219,7 +219,7 @@ ParseResult parseOutput(const QString& cleanOutput, const Mfc::Spec& spec)
 }
 
 MergeResult merge(const ParseResult& parsed, Mfc::Document* document,
-                  bool markVerified, Mfc::KeySource fallbackSource)
+                  bool markVerified, Mfc::KeySource fallbackSource, quint64 session)
 {
     MergeResult result;
     if(document == nullptr)
@@ -245,7 +245,8 @@ MergeResult merge(const ParseResult& parsed, Mfc::Document* document,
                 if(markVerified && current.state != Mfc::KeyState::Verified)
                 {
                     document->setKeyVerified(candidate.sector, candidate.type, candidate.key,
-                                             candidate.source == Mfc::KeySource::None ? fallbackSource : candidate.source);
+                                             candidate.source == Mfc::KeySource::None ? fallbackSource : candidate.source,
+                                             session);
                     result.updated++;
                 }
                 continue;
@@ -261,9 +262,13 @@ MergeResult merge(const ParseResult& parsed, Mfc::Document* document,
                 result.added++;
             else
                 result.updated++;
-            document->setKey(candidate.sector, candidate.type, candidate.key,
-                             markVerified ? Mfc::KeyState::Verified : Mfc::KeyState::Pending,
-                             candidate.source == Mfc::KeySource::None ? fallbackSource : candidate.source);
+            if(markVerified)
+                document->setKeyVerified(candidate.sector, candidate.type, candidate.key,
+                                         candidate.source == Mfc::KeySource::None ? fallbackSource : candidate.source,
+                                         session);
+            else
+                document->setKey(candidate.sector, candidate.type, candidate.key, Mfc::KeyState::Pending,
+                                 candidate.source == Mfc::KeySource::None ? fallbackSource : candidate.source);
         }
         else if(!candidate.key.isEmpty() && current.value == candidate.key
                 && current.state == Mfc::KeyState::Pending)
@@ -447,7 +452,8 @@ Command buildCheck(const QVariantMap& profile, const Mfc::Spec& spec,
         command.text += QStringLiteral(" -f \"%1\"").arg(dictionary);
     if(!includeDefaults)
         command.text += QStringLiteral(" --no-default");
-    command.successPattern.clear(); // the completion marker is the boundary; the table is parsed afterwards
+    command.usesStdin = true; // hf mf chk polls kbd_enter_pressed() per key chunk
+    command.successPattern.clear(); // a one-shot process exit is the boundary; the table is parsed afterwards
     command.failurePattern = QStringLiteral("No tag found|Can't select card|command execution time out|not available in this mode");
     command.hardTimeoutMs = 15 * 60 * 1000;
     return command;
@@ -465,7 +471,8 @@ Command buildAutoPwn(const QVariantMap& profile, const Mfc::Spec& spec,
         command.text += QStringLiteral(" --ns");
     if(!dictionary.trimmed().isEmpty())
         command.text += QStringLiteral(" -f \"%1\"").arg(dictionary);
-    command.successPattern.clear(); // the completion marker is the boundary; the table is parsed afterwards
+    command.usesStdin = true; // hf mf autopwn polls kbd_enter_pressed() per chunk
+    command.successPattern.clear(); // a one-shot process exit is the boundary; the table is parsed afterwards
     command.failurePattern = QStringLiteral("No tag found|Can't select card|command execution time out|not available in this mode");
     command.hardTimeoutMs = 60 * 60 * 1000;
     return command;
@@ -488,7 +495,8 @@ Command buildNested(const QVariantMap& profile, const Mfc::Spec& spec, bool isSt
     command.text.replace(QStringLiteral("<key type>"), keyTypes.value(typeKey).toString().isEmpty()
                          ? typeKey.toLower() : keyTypes.value(typeKey).toString());
     command.text.replace(QStringLiteral("<key>"), knownKey);
-    command.successPattern.clear(); // the completion marker is the boundary; the table is parsed afterwards
+    command.usesStdin = true; // hf mf nested polls kbd_enter_pressed()
+    command.successPattern.clear(); // a one-shot process exit is the boundary; the table is parsed afterwards
     command.failurePattern = QStringLiteral("Can't found|Can't authenticate|Static nonce detected|"
                                             "No tag found|command execution time out|not available in this mode");
     command.hardTimeoutMs = 30 * 60 * 1000;
@@ -516,7 +524,8 @@ Command buildHardnested(const QVariantMap& profile, const Mfc::Spec& spec,
     command.text.replace(QStringLiteral("<target key block>"), QString::number(spec.trailerBlockOfSector(targetSector)));
     command.text.replace(QStringLiteral("<target key type>"), targetTypes.value(targetKeyName).toString().isEmpty()
                          ? targetKeyName.toLower() : targetTypes.value(targetKeyName).toString());
-    command.successPattern.clear(); // the completion marker is the boundary; the table is parsed afterwards
+    command.usesStdin = true; // hardnested does not poll today; every method uses one protocol
+    command.successPattern.clear(); // a one-shot process exit is the boundary; the table is parsed afterwards
     command.failurePattern = QStringLiteral("Can't authenticate|Static nonce detected|No tag found|"
                                             "command execution time out|not available in this mode");
     command.hardTimeoutMs = 60 * 60 * 1000;
@@ -530,7 +539,8 @@ static Command simpleCommand(const QVariantMap& profile, const QString& section,
     command.text = profile.value(section).toMap().value("cmd").toString();
     if(command.text.isEmpty())
         command.text = fallback;
-    command.successPattern.clear(); // the completion marker is the boundary; the table is parsed afterwards
+    command.usesStdin = true; // darkside (mfc_read_tag) and sen poll kbd_enter_pressed()
+    command.successPattern.clear(); // a one-shot process exit is the boundary; the table is parsed afterwards
     command.failurePattern = QStringLiteral("Static nonce detected|Static encrypted nonce detected|"
                                             "No tag found|command execution time out|not available in this mode");
     command.hardTimeoutMs = hardTimeout;
@@ -547,7 +557,8 @@ Command buildSen(const QVariantMap& profile)
 {
     Command command = simpleCommand(profile, QStringLiteral("sen"), QStringLiteral("hf mf sen"),
                                     60 * 60 * 1000);
-    command.successPattern.clear(); // the completion marker is the boundary; the table is parsed afterwards
+    command.usesStdin = true; // one protocol for every recovery method
+    command.successPattern.clear(); // a one-shot process exit is the boundary; the table is parsed afterwards
     return command;
 }
 
@@ -555,7 +566,8 @@ Command buildIsen(const QVariantMap& profile)
 {
     Command command = simpleCommand(profile, QStringLiteral("isen"), QStringLiteral("hf mf isen"),
                                     10 * 60 * 1000);
-    command.successPattern.clear(); // the completion marker is the boundary; the table is parsed afterwards
+    command.usesStdin = true; // one protocol for every recovery method
+    command.successPattern.clear(); // a one-shot process exit is the boundary; the table is parsed afterwards
     return command;
 }
 

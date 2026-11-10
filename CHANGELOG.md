@@ -1,6 +1,16 @@
-# Change Log
+﻿# Change Log
 
 [中文](doc/CHANGELOG/CHANGELOG_zh_CN.md)  
+
+### V0.3.1 (feature/mfc-workbench, review fixes)
++ Write protection is enforced by one write plan: preview, manual row ticks, "retry failed only" and the command loop all re-check the include options, so Block 0 and trailers never reach the client unless they were explicitly allowed
++ Separate the source document from the card in the field: keys and blocks carry the RF session that produced them, a different UID is not adopted, and a reconnect requires a new identification before evidence is reused
++ Trailer reads keep only the bytes the access conditions return; a candidate key is no longer filled into a "read" trailer
++ Trailer writes validate the access conditions on the card, use the key those conditions accept, and report written+verified / written-not-verified / mismatch / failed instead of re-writing with another key
++ The client channel is owned globally: stopping to wait, a hard timeout or an early error no longer re-enables other pages while the client may still be executing
++ Recovery commands (chk, autopwn, nested, darkside, sen) run in a one-shot client process, because v4.23346 polls stdin and would consume a queued `rem` as a key press
++ Backup `.sha256` sidecars hash the file that was written; the internal document digest keeps its own name
++ The write dialog has one task state: preview/write/retry cannot overlap and the plan is a frozen snapshot
 
 ### V0.3.0 (feature/mfc-workbench)
 + Add the MFC workbench page: one document model for data, keys, validity, modification and recovery state

@@ -68,6 +68,9 @@ public slots:
     void onPM3HWConnectFailed(const QString& reason, quint64 attempt);
     void onPM3VersionInfo(const QString& clientVersion, const QString& firmwareVersion, const QString& target, bool mismatch, bool clientQtPlot, quint64 attempt);
     void onMfcDocumentTypeChanged(int type);
+    // One-shot client used for commands that poll stdin (hf mf chk, autopwn).
+    void runIsolatedCommand(const QString& cmd, const QString& label);
+    void abortIsolatedCommand();
 private slots:
 
     void on_PM3_connectButton_clicked();
@@ -247,6 +250,7 @@ private:
     int stashedIndex = -1;
 
     void uiInit();
+    void finishIsolatedRun(int exitCode, QProcess::ExitStatus status);
 
     PM3Process* pm3;
     bool pm3state;
@@ -261,6 +265,13 @@ private:
     QStringList portList;
     QStringList clientEnv;
     QDir* clientWorkingDir;
+    // Client executable/arguments of the last Connect, reused by the one-shot
+    // runner (the persistent client is stopped first, so only one process owns
+    // the serial port).
+    QString lastClientPath;
+    QStringList lastClientArgs;
+    QProcess* isolatedProcess = nullptr;
+    quint64 isolatedRunId = 0;
 
     T55xxTab* t55xxTab;
     MfcWorkbench* workbench = nullptr;
