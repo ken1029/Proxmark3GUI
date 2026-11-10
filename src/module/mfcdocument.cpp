@@ -760,8 +760,10 @@ IoResult Document::loadDataFile(const QString& filename, const QString& formatHi
         result.error = QStringLiteral("cannot open %1: %2").arg(filename, file.errorString());
         return result;
     }
-    const QByteArray data = file.readAll();
+    QByteArray data = file.readAll();
     file.close();
+    if(data.startsWith("\xEF\xBB\xBF"))
+        data.remove(0, 3);
 
     QString format = formatHint.trimmed().toLower();
     if(format.isEmpty() || format == QStringLiteral("auto"))
@@ -1055,8 +1057,10 @@ bool Document::parseKeyText(const QString& text, Document* doc, QString* error, 
         else if((match = pairRe.match(line)).hasMatch())
         {
             sector = nextSector;
-            if(!doc->setKey(sector, 'A', match.captured(1), KeyState::Pending, KeySource::Imported)
-               || !doc->setKey(sector, 'B', match.captured(2), KeyState::Pending, KeySource::Imported))
+            const QString pairA = match.captured(1) == QStringLiteral("????????????") ? QString() : match.captured(1);
+            const QString pairB = match.captured(2) == QStringLiteral("????????????") ? QString() : match.captured(2);
+            if(!doc->setKey(sector, 'A', pairA, KeyState::Pending, KeySource::Imported)
+               || !doc->setKey(sector, 'B', pairB, KeyState::Pending, KeySource::Imported))
             {
                 *error = QStringLiteral("line %1: sector %2 out of range").arg(lineNo).arg(sector);
                 return false;
