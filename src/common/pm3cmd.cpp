@@ -27,7 +27,10 @@ Util::ReturnTrigger makeWriteTrigger(const QVariantMap& config, int waitTime)
 {
     Util::ReturnTrigger trigger(qMax<unsigned long>((unsigned long)waitTime, 2000));
     trigger.hardTimeout = qMax<unsigned long>(trigger.waitTime * 5, 10000);
-    trigger.waitForPrompt = true;
+    // Pipe mode has no trailing prompt: "rem <token>" gives the write a real
+    // completion boundary instead of waiting for the idle timeout.
+    trigger.requireCompletion = true;
+    trigger.useCompletionMarker = true;
     trigger.expectedOutputs = jsonStringList(config["success pattern"]);
     trigger.failedOutputs = jsonStringList(config["failed flag"]);
     if(trigger.failedOutputs.isEmpty())

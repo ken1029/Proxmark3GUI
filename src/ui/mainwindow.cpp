@@ -6,6 +6,8 @@
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QSaveFile>
+#include <QSemaphore>
+#include <QSharedPointer>
 
 MainWindow::MainWindow(QWidget *parent):
     QMainWindow(parent)
@@ -35,8 +37,14 @@ MainWindow::MainWindow(QWidget *parent):
     settings->setIniCodec("UTF-8");
 
     pm3Thread = new QThread(this);
-    connect(QApplication::instance(), &QApplication::aboutToQuit, pm3Thread, &QThread::quit);
     pm3 = new PM3Process(pm3Thread);
+    // Do not quit the thread here: the stack-allocated MainWindow is destroyed
+    // after aboutToQuit, and its destructor must still be able to run killPM3
+    // in the PM3 thread. Just break a wait that is in flight.
+    connect(QApplication::instance(), &QApplication::aboutToQuit, this, [this]() {
+        if(pm3 != nullptr)
+            pm3->requestStop();
+    });
     pm3Thread->start();
     pm3state = false;
     clientWorkingDir = new QDir;
@@ -75,14 +83,20 @@ MainWindow::MainWindow(QWidget *parent):
 MainWindow::~MainWindow()
 {
     // Stop the client before the widgets it reports to are destroyed.
-    // The QProcess lives in pm3Thread: it has to be killed from that thread.
-    // Touching it here (or letting its destructor run here) deadlocks on Windows
-    // and left Proxmark3GUI.exe alive holding the install directory.
+    // The QProcess lives in pm3Thread, so killPM3() must run there. Use a
+    // queued call with a bounded wait: a blocking invoke would hang forever if
+    // the thread had already stopped processing events.
     if(pm3 != nullptr)
     {
         pm3->disconnect(); // no stale signal may reach the dying window
-        pm3->requestStop(); // breaks a connect that is still waiting for the prompt
-        QMetaObject::invokeMethod(pm3, "killPM3", Qt::BlockingQueuedConnection);
+        pm3->requestStop(); // breaks a connect that is still waiting for the marker
+        QSharedPointer<QSemaphore> killed(new QSemaphore);
+        QMetaObject::invokeMethod(pm3, [this, killed]() {
+            pm3->killPM3(pm3->currentAttempt());
+            killed->release();
+        }, Qt::QueuedConnection);
+        if(!killed->tryAcquire(1, 2000))
+            qWarning() << "pm3 thread did not process killPM3";
     }
     pm3Thread->quit();
     if(!pm3Thread->wait(3000))
@@ -171,6 +185,12 @@ void MainWindow::on_portSearchTimer_timeout()
 
 void MainWindow::on_PM3_connectButton_clicked()
 {
+    if(connectInFlight)
+    {
+        qDebug() << "connect already in progress";
+        return;
+    }
+    connectClickTimer.start();
     qDebug() << "Main:" << QThread::currentThread();
 
     const QComboBox* portBox = ui->PM3_portBox;
@@ -227,6 +247,8 @@ void MainWindow::on_PM3_connectButton_clicked()
     addClientPath(clientPath);
 
     QProcess envSetProcess;
+    QElapsedTimer envScriptTimer;
+    envScriptTimer.start();
     QString envScriptPath = ui->Set_Client_envScriptEdit->text();
     if(envScriptPath.contains("<client dir>"))
         envScriptPath.replace("<client dir>", clientFile.absoluteDir().absolutePath());
@@ -288,29 +310,59 @@ void MainWindow::on_PM3_connectButton_clicked()
     pendingPort = port;
     portSearchTimer->stop();
     setStatusBar(connectStatusBar, tr("Connecting..."));
-    emit connectPM3(clientPath, args);
+    connectInFlight = true;
+    ui->PM3_connectButton->setEnabled(false);
+    activeConnectAttempt = pm3->beginConnect();
+    qDebug() << "connect: prep=" << connectClickTimer.elapsed() << "ms attempt=" << activeConnectAttempt;
+    emit connectPM3(activeConnectAttempt, clientPath, args);
 
     envSetProcess.kill();
+    qDebug() << "connect: env script=" << envScriptTimer.elapsed() << "ms";
 }
 
 void MainWindow::onPM3ErrorOccurred(QProcess::ProcessError error)
 {
     qDebug() << "PM3 Error:" << error << pm3->errorString();
-    if(error == QProcess::FailedToStart)
-        QMessageBox::information(this, tr("Info"), tr("Failed to start the client") + "\n" + pm3->errorString());
+    // connectPM3() reports FailedToStart through HWConnectFailed. Do not reset
+    // here on Crashed: the signal can arrive after a new attempt has started.
 }
 
-void MainWindow::onPM3HWConnectFailed()
+void MainWindow::onPM3HWConnectFailed(const QString& reason, quint64 attempt)
 {
-    QMessageBox::information(this, tr("Info"), tr("Failed to connect to the hardware"));
+    if(attempt != activeConnectAttempt)
+    {
+        qDebug() << "ignoring stale connect failure" << attempt << activeConnectAttempt;
+        return;
+    }
+    activeConnectAttempt = 0;
+    connectInFlight = false;
+    ui->PM3_connectButton->setEnabled(true);
+    onPM3StateChanged(false, QString(), 0);
+    QMessageBox::information(this, tr("Info"), tr("Failed to connect to the hardware") + "\n" + reason);
 }
 
-void MainWindow::onPM3StateChanged(bool st, const QString& info)
+void MainWindow::onPM3StateChanged(bool st, const QString& info, quint64 attempt)
 {
+    if(attempt != activeConnectAttempt)
+    {
+        qDebug() << "ignoring stale state" << st << "attempt" << attempt << "active" << activeConnectAttempt;
+        return;
+    }
+    if(st || !connectInFlight)
+    {
+        connectInFlight = false;
+        ui->PM3_connectButton->setEnabled(true);
+    }
     pm3state = st;
     setState(st);
     if(st == true)
     {
+        const qint64 total = connectClickTimer.isValid() ? connectClickTimer.elapsed() : pm3->lastConnectMs;
+        const qint64 processMs = pm3->lastStartMs + pm3->lastHandshakeMs;
+        const qint64 prepMs = qMax<qint64>(0, total - processMs);
+        qDebug() << "connect: prep=" << prepMs << "ms start=" << pm3->lastStartMs
+                 << "ms version=" << pm3->lastVersionMs << "ms boundary=" << pm3->lastHandshakeMs
+                 << "ms total=" << total << "ms";
         portSearchTimer->stop();
         if(!keepClientActive)
             emit setSerialListener(pendingPort, !pendingPort.isEmpty());
@@ -328,7 +380,16 @@ void MainWindow::onPM3StateChanged(bool st, const QString& info)
 
 void MainWindow::on_PM3_disconnectButton_clicked()
 {
-    emit killPM3();
+    // Break an in-flight handshake before the queued killPM3() can run, and
+    // invalidate the attempt so queued true/error signals are ignored.
+    const quint64 attempt = activeConnectAttempt;
+    activeConnectAttempt = 0;
+    if(pm3 != nullptr)
+        pm3->requestStop();
+    connectInFlight = false;
+    ui->PM3_connectButton->setEnabled(true);
+    onPM3StateChanged(false, QString(), 0);
+    emit killPM3(attempt);
     emit setSerialListener(false);
 }
 
@@ -353,7 +414,8 @@ void MainWindow::on_stopButton_clicked()
             if(!pm3state)
                 break;
         }
-        emit reconnectPM3();
+        activeConnectAttempt = pm3->beginConnect();
+        emit reconnectPM3(activeConnectAttempt);
         emit setSerialListener(!keepClientActive);
     }
 }
@@ -1185,6 +1247,9 @@ void MainWindow::uiInit()
     programStatusBar = new QLabel(this);
     PM3VersionBar = new QLabel(this);
     stopButton = new QPushButton(this);
+    connectStatusBar->setObjectName("connectStatusBar");
+    programStatusBar->setObjectName("programStatusBar");
+    PM3VersionBar->setObjectName("PM3VersionBar");
     setStatusBar(connectStatusBar, tr("Not Connected"));
     setStatusBar(programStatusBar, tr("Idle"));
     setStatusBar(PM3VersionBar, "");
@@ -1471,15 +1536,18 @@ void MainWindow::applyCapabilities()
     const bool hfSniff = capabilities.has("hfsniff") && mf;
     const bool plot = clientQtPlot && lf;
 
-    const int mfTab = ui->funcTab->indexOf(ui->mifareTab);
-    const int lfTab = ui->funcTab->indexOf(ui->lfTab);
-    const int t55xxTab = ui->funcTab->indexOf(ui->t55xxTab);
-    if(mfTab >= 0)
-        ui->funcTab->setTabEnabled(mfTab, mf);
-    if(lfTab >= 0)
-        ui->funcTab->setTabEnabled(lfTab, lf);
-    if(t55xxTab >= 0)
-        ui->funcTab->setTabEnabled(t55xxTab, lf);
+    // dockInit() moves every page out of funcTab into a QDockWidget, so the
+    // visible tab is the dock, not the (now empty) QTabWidget. ui->t55xxTab is
+    // the removed UI page; the live page is the member pointer.
+    auto applyPage = [this](QWidget* page, bool enabled) {
+        page->setEnabled(enabled);
+        for(QDockWidget* dock : dockList)
+            if(dock->widget() == page)
+                dock->setEnabled(enabled);
+    };
+    applyPage(ui->mifareTab, mf);
+    applyPage(ui->lfTab, lf);
+    applyPage(this->t55xxTab, lf);
 
     const QString mfReason = capabilities.reason("ISO14443A");
     const QString lfReason = capabilities.reason("LF");
@@ -1491,7 +1559,7 @@ void MainWindow::applyCapabilities()
     for(QWidget* widget : mfWidgets)
         widget->setToolTip(mf ? QString() : mfReason);
 
-    QList<QWidget*> lfWidgets = {ui->LF_LFconfigGroupBox, ui->LF_operationGroupBox, ui->lfTab, ui->t55xxTab};
+    QList<QWidget*> lfWidgets = {ui->LF_LFconfigGroupBox, ui->LF_operationGroupBox, ui->lfTab, this->t55xxTab};
     for(QWidget* widget : lfWidgets)
         widget->setToolTip(lf ? QString() : lfReason);
 
@@ -1519,8 +1587,13 @@ void MainWindow::applyCapabilities()
 }
 
 void MainWindow::onPM3VersionInfo(const QString& clientVersion, const QString& firmwareVersion,
-                                  const QString& target, bool mismatch, bool clientQtPlot)
+                                  const QString& target, bool mismatch, bool clientQtPlot, quint64 attempt)
 {
+    if(attempt != activeConnectAttempt)
+    {
+        qDebug() << "ignoring stale version info" << attempt << activeConnectAttempt;
+        return;
+    }
     this->clientQtPlot = clientQtPlot;
     applyCapabilities();
 
@@ -1531,8 +1604,11 @@ void MainWindow::onPM3VersionInfo(const QString& clientVersion, const QString& f
         info << tr("firmware %1").arg(firmwareVersion);
     if(!target.isEmpty())
         info << tr("target %1").arg(target);
-    if(pm3 != nullptr && pm3->lastConnectMs > 0)
-        info << tr("ready in %1 s").arg(pm3->lastConnectMs / 1000.0, 0, 'f', 1);
+    if(pm3 != nullptr && (connectClickTimer.isValid() || pm3->lastConnectMs > 0))
+    {
+        const qint64 totalMs = connectClickTimer.isValid() ? connectClickTimer.elapsed() : pm3->lastConnectMs;
+        info << tr("ready in %1 s").arg(totalMs / 1000.0, 0, 'f', 2);
+    }
     if(!info.isEmpty())
         statusBar()->showMessage(info.join(" | "), 15000);
 

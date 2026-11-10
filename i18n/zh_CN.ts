@@ -1088,6 +1088,26 @@ The &quot;&lt;client dir&gt;&quot; will be replaced by the directory of the &quo
         <translation>无法启动客户端</translation>
     </message>
     <message>
+        <source>The client process did not start: %1</source>
+        <translation>客户端程序无法启动：%1</translation>
+    </message>
+    <message>
+        <source>Connection cancelled</source>
+        <translation>连接已取消</translation>
+    </message>
+    <message>
+        <source>The client exited during the handshake</source>
+        <translation>客户端在握手期间退出</translation>
+    </message>
+    <message>
+        <source>Timed out waiting for the client version</source>
+        <translation>等待客户端版本超时</translation>
+    </message>
+    <message>
+        <source>The client reported no firmware version (offline?)</source>
+        <translation>客户端未报告固件版本（离线？）</translation>
+    </message>
+    <message>
         <location filename="../src/ui/mainwindow.cpp" line="282"/>
         <source>Failed to connect to the hardware</source>
         <translation>无法连接到PM3硬件</translation>

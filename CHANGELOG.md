@@ -2,6 +2,20 @@
 
 [中文](doc/CHANGELOG/CHANGELOG_zh_CN.md)  
 
+### V0.2.10
++ Marker mode now accepts only the matching `remark:` reply; a split `pm3 --> ` echo is no longer a completion boundary (writes, emulator, trace load/save, handshake)
++ Add explicit interactive-prompt mode for clients that really print a trailing prompt
++ Connect attempts get a GUI-side generation: cancelling before the worker starts or after a queued success cannot revive an old connection
++ Add deterministic split-prompt and pre-start cancellation regressions
+
+### V0.2.9
++ Connect over a pipe immediately: send `hw version` at startup and use a unique `rem` marker as the completion boundary (v4.23346 client has no startup/trailing prompt on a pipe)
++ Add a completion marker to writes and trace load/save so they stop waiting for a prompt that never arrives
++ Report connect phases (process start, version, handshake) and the total button-to-connected time
++ Make Disconnect cancel an in-flight handshake; restore the UI on failure; ignore duplicate Connect clicks
++ Fix the QApplication shutdown order and bound the PM3-thread cleanup
++ Disable the live LF/T55xx docks when the capability manifest removes LF
+
 ### V0.2.8
 + Add support for Iceman/RRG repo v4.16717  
 + Fix some bugs  

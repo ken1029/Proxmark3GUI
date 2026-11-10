@@ -850,7 +850,8 @@ void Mifare::loadSniff(const QString& file)
 
     Util::ReturnTrigger trigger(10000);
     trigger.hardTimeout = 30000;
-    trigger.waitForPrompt = true;
+    trigger.requireCompletion = true;
+    trigger.useCompletionMarker = true;
     trigger.expectedOutputs = QStringList({"Recorded Activity \\(TraceLen", "loaded"});
     trigger.failedOutputs = QStringList({"Could not open file", "not available in this mode", "\\[-\\]"});
     Util::ExecResult result = util->execCMDWithResult(cmd, trigger);
@@ -875,7 +876,8 @@ bool Mifare::saveSniff(const QString& file, TraceSource source)
 
     Util::ReturnTrigger trigger(15000);
     trigger.hardTimeout = 60000;
-    trigger.waitForPrompt = true;
+    trigger.requireCompletion = true;
+    trigger.useCompletionMarker = true;
     trigger.expectedOutputs = QStringList({"Saved \\d+ bytes to binary file"});
     trigger.failedOutputs = QStringList({"trace is empty", "Could not", "not available in this mode", "file not found or locked", "\\[-\\]"});
     Util::ExecResult result = util->execCMDWithResult(cmd, trigger);

@@ -45,12 +45,14 @@ public:
         bool successPatternMatched;
         bool failurePatternMatched;
         bool promptSeen;
+        bool completionMarkerSeen;
         ExecResult()
         {
             status = EXEC_NOT_RUNNING;
             successPatternMatched = false;
             failurePatternMatched = false;
             promptSeen = false;
+            completionMarkerSeen = false;
         }
         bool isOk() const
         {
@@ -64,7 +66,8 @@ public:
         unsigned long hardTimeout;   // absolute timeout, 0 = 4 * waitTime (minimum 5s)
         QStringList expectedOutputs; // success patterns (regex)
         QStringList failedOutputs;   // failure patterns (regex), end the wait immediately
-        bool waitForPrompt;          // require the client prompt before reporting completion
+        bool requireCompletion;      // wait for a real completion boundary before reporting a result
+        bool useCompletionMarker;    // append "rem <token>" so pipe mode has a boundary
 
         ReturnTrigger(unsigned long time)
         {
@@ -72,7 +75,8 @@ public:
             hardTimeout = 0;
             expectedOutputs = QStringList();
             failedOutputs = QStringList();
-            waitForPrompt = false;
+            requireCompletion = false;
+            useCompletionMarker = false;
         }
         ReturnTrigger(const QStringList& outputs)
         {
@@ -80,7 +84,8 @@ public:
             hardTimeout = 0;
             expectedOutputs = outputs;
             failedOutputs = QStringList();
-            waitForPrompt = false;
+            requireCompletion = false;
+            useCompletionMarker = false;
         }
         ReturnTrigger(unsigned long time, const QStringList& outputs)
         {
@@ -88,7 +93,8 @@ public:
             hardTimeout = 0;
             expectedOutputs = outputs;
             failedOutputs = QStringList();
-            waitForPrompt = false;
+            requireCompletion = false;
+            useCompletionMarker = false;
         }
     };
 
@@ -108,6 +114,10 @@ public:
     static QString stripAnsi(const QString& text);
     static bool matchAnyPattern(const QString& text, const QStringList& patterns, QString* matched = nullptr);
     static bool isPromptAtEnd(const QString& text);
+    // Unique per command/connection; safe to embed in a "rem <token>" line.
+    static QString makeCompletionToken(const QString& prefix = QStringLiteral("PM3GUI"));
+    // True only for the client's "remark: <token>" reply, never for the echo.
+    static bool hasCompletionMarker(const QString& cleanOutput, const QString& token);
 public slots:
     void processOutput(const QString& output);
     static void setClientType(Util::ClientType clientType);

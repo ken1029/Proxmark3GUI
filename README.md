@@ -1,23 +1,4 @@
 # Proxmark3GUI
-
-> **本 fork 的差異（v4.23346 適配）**
->
-> 這個 fork 以 `wh201906/Proxmark3GUI` 的 `b74ad1b` 為基底，加上對 **RfidResearchGroup/proxmark3 v4.23346**
-> （capabilities 版本 11）的適配：
->
-> - 新增 `config/config_rrgv4.23346.json`（內建 profile，已加入 `config.qrc`）
-> - 新增**繁體中文（台灣）**介面 `i18n/zh_TW.ts` / `zh_TW.qm`（原本只有 `en_US`、`zh_CN`）
-> - MIFARE 模擬參數 `--crack` → `-x`
-> - `trace save` 區分「設備上的 trace」與「已載入／顯示的 trace」，並改為安全的暫存檔流程
-> - 寫入結果改為看成功標記＋讀回驗證，逾時／功能不可用／只有回顯都視為失敗
-> - 啟動時分段輸出、版本解析（`Client....` / `OS........` / `Target....`）、client 結束與重連處理
-> - 依 `pm3_capabilities.json`（由韌體建置設定產生）停用裝置不支援的功能
-> - 關閉視窗時正確認掉 client 程序，不再留下 `Proxmark3GUI.exe` 鎖住目錄
-> - 新增離線 Qt 測試 `tests/`（含 Windows 用的 mock client）與 `scripts/gen-capabilities.py`
->
-> 建置：`qmake src/Proxmark3GUI.pro && make`（Qt5 + QtSerialPort；測試：`qmake tests/tests.pro && make && ./gui-tests`）
-> 翻譯：`lrelease i18n/zh_TW.ts -qm i18n/zh_TW.qm`
-
 [![downloads](https://img.shields.io/github/downloads/wh201906/Proxmark3GUI/total?label=GitHub%20release%20downloads)](https://github.com/wh201906/Proxmark3GUI/releases)  
 [![downloads](https://img.shields.io/sourceforge/dt/proxmark3gui.svg?label=SourceForge%20downloads)](https://sourceforge.net/projects/proxmark3gui/)  
 

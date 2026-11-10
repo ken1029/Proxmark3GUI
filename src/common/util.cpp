@@ -1,5 +1,7 @@
 ﻿#include "util.h"
 
+#include <atomic>
+
 Util::ClientType Util::clientType = CLIENTTYPE_OFFICIAL;
 
 int Util::rawTabIndex = 0;
@@ -72,6 +74,23 @@ bool Util::isPromptAtEnd(const QString& text)
     return prompt.match(text).hasMatch();
 }
 
+QString Util::makeCompletionToken(const QString& prefix)
+{
+    static std::atomic<quint64> counter(0);
+    const quint64 id = counter.fetch_add(1) + 1;
+    return QString("%1_%2_%3").arg(prefix).arg(QCoreApplication::applicationPid()).arg(id);
+}
+
+bool Util::hasCompletionMarker(const QString& cleanOutput, const QString& token)
+{
+    if(token.isEmpty())
+        return false;
+    // The client echoes "rem <token>"; only "remark: <token>" proves execution.
+    static const QString suffix = "(?![A-Za-z0-9_])";
+    QRegularExpression marker("remark[ \\t]*:[ \\t]*" + QRegularExpression::escape(token) + suffix);
+    return marker.match(cleanOutput).hasMatch();
+}
+
 Util::ExecResult Util::execCMDWithResult(const QString& cmd, const ReturnTrigger& trigger, bool rawOutput)
 {
     Q_UNUSED(rawOutput)
@@ -85,7 +104,12 @@ Util::ExecResult Util::execCMDWithResult(const QString& cmd, const ReturnTrigger
     isRequiringOutput = true;
     requiredOutput->clear();
     timeStamp.start();
-    execCMD(cmd);
+    const QString token = trigger.useCompletionMarker ? makeCompletionToken() : QString();
+    qDebug() << "executing: " << cmd;
+    QString wire = cmd + "\n";
+    if(!token.isEmpty())
+        wire += "rem " + token + "\n";
+    emit write(wire);
 
     const qint64 idleLimit = qMax<qint64>((qint64)trigger.waitTime, 10);
     const qint64 hardLimit = trigger.hardTimeout ? (qint64)trigger.hardTimeout : qMax<qint64>(idleLimit * 4, 5000);
@@ -96,6 +120,7 @@ Util::ExecResult Util::execCMDWithResult(const QString& cmd, const ReturnTrigger
     bool successMatched = false;
     bool failureMatched = false;
     bool promptSeen = false;
+    bool completionMarkerSeen = false;
     bool clientExited = false;
 
     while(true)
@@ -112,17 +137,30 @@ Util::ExecResult Util::execCMDWithResult(const QString& cmd, const ReturnTrigger
         if(!failureMatched && matchAnyPattern(clean, trigger.failedOutputs))
             failureMatched = true;
         if(!successMatched && matchAnyPattern(clean, trigger.expectedOutputs))
-        {
             successMatched = true;
-            if(!trigger.waitForPrompt)
-            {
-                delay(200);
-                break;
-            }
-        }
-        if(trigger.waitForPrompt && isPromptAtEnd(clean))
-        {
+        if(!completionMarkerSeen)
+            completionMarkerSeen = hasCompletionMarker(clean, token);
+        // An empty prompt is only a boundary for the explicit interactive mode.
+        // In marker mode the client may split the echo after "pm3 --> ", so a
+        // prompt match there is not a completed command.
+        if(trigger.requireCompletion && !trigger.useCompletionMarker && isPromptAtEnd(clean))
             promptSeen = true;
+
+        if(failureMatched)
+            break;
+        if(trigger.useCompletionMarker)
+        {
+            if(completionMarkerSeen)
+                break;
+        }
+        else if(trigger.requireCompletion)
+        {
+            if(promptSeen)
+                break;
+        }
+        else if(successMatched)
+        {
+            delay(200);
             break;
         }
         if(!isRunning)
@@ -130,8 +168,6 @@ Util::ExecResult Util::execCMDWithResult(const QString& cmd, const ReturnTrigger
             clientExited = true;
             break;
         }
-        if(failureMatched)
-            break;
         if(timeStamp.elapsed() >= idleLimit || hardTimer.elapsed() >= hardLimit)
             break;
     }
@@ -140,15 +176,20 @@ Util::ExecResult Util::execCMDWithResult(const QString& cmd, const ReturnTrigger
     res.successPatternMatched = successMatched;
     res.failurePatternMatched = failureMatched;
     res.promptSeen = promptSeen;
+    res.completionMarkerSeen = completionMarkerSeen;
 
     if(failureMatched)
         res.status = EXEC_FAILED;
+    else if(trigger.useCompletionMarker)
+        res.status = completionMarkerSeen
+                     ? ((successMatched || trigger.expectedOutputs.isEmpty()) ? EXEC_OK : EXEC_FAILED)
+                     : (clientExited ? EXEC_ABORTED : EXEC_TIMEOUT);
+    else if(trigger.requireCompletion)
+        res.status = promptSeen
+                     ? ((successMatched || trigger.expectedOutputs.isEmpty()) ? EXEC_OK : EXEC_FAILED)
+                     : (clientExited ? EXEC_ABORTED : EXEC_TIMEOUT);
     else if(successMatched)
-        res.status = EXEC_OK;
-    else if(promptSeen && trigger.expectedOutputs.isEmpty())
-        res.status = EXEC_OK; // command completed; caller validates the effect (e.g. read-back)
-    else if(promptSeen)
-        res.status = EXEC_FAILED; // completed but the success marker never appeared
+        res.status = EXEC_OK; // legacy short command: the success line is its own boundary
     else if(clientExited)
         res.status = EXEC_ABORTED;
     else

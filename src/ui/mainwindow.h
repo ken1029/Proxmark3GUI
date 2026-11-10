@@ -24,6 +24,7 @@
 #include <QScrollBar>
 #include <QTimer>
 #include <QDateTime>
+#include <QElapsedTimer>
 #include <QDockWidget>
 #include <QMenu>
 
@@ -46,6 +47,7 @@ QT_END_NAMESPACE
 class MainWindow : public QMainWindow
 {
     Q_OBJECT
+    friend class GuiTests;
 
 public:
     MainWindow(QWidget *parent = nullptr);
@@ -57,13 +59,13 @@ public slots:
     void refreshOutput(const QString& output);
     void refreshCMD(const QString& cmd);
     void setStatusBar(QLabel* target, const QString& text);
-    void onPM3StateChanged(bool st, const QString& info);
+    void onPM3StateChanged(bool st, const QString& info, quint64 attempt);
     void MF_onMFCardTypeChanged(int id, bool st);
     void on_Raw_keyPressed(QObject *obj_addr, QEvent &event);
     void on_MF_keyWidget_resized(QObject *obj_addr, QEvent &event);
     void onPM3ErrorOccurred(QProcess::ProcessError error);
-    void onPM3HWConnectFailed();
-    void onPM3VersionInfo(const QString& clientVersion, const QString& firmwareVersion, const QString& target, bool mismatch, bool clientQtPlot);
+    void onPM3HWConnectFailed(const QString& reason, quint64 attempt);
+    void onPM3VersionInfo(const QString& clientVersion, const QString& firmwareVersion, const QString& target, bool mismatch, bool clientQtPlot, quint64 attempt);
 private slots:
 
     void on_PM3_connectButton_clicked();
@@ -246,6 +248,9 @@ private:
 
     PM3Process* pm3;
     bool pm3state;
+    bool connectInFlight = false;
+    quint64 activeConnectAttempt = 0;
+    QElapsedTimer connectClickTimer;
     QString pendingPort;
     bool keepButtonsEnabled;
     bool keepClientActive;
@@ -281,9 +286,9 @@ private:
 protected:
     void contextMenuEvent(QContextMenuEvent *event) override;
 signals:
-    void connectPM3(const QString& path, const QStringList args);
-    void reconnectPM3();
-    void killPM3();
+    void connectPM3(quint64 attempt, const QString& path, const QStringList args);
+    void reconnectPM3(quint64 attempt);
+    void killPM3(quint64 attempt);
     void setSerialListener(bool state);
     void setSerialListener(const QString& name, bool state);
     void setProcEnv(const QStringList *env);

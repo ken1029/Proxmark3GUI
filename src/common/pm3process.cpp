@@ -31,12 +31,22 @@ static QString baseVersion(const QString& version)
 
 void PM3Process::requestStop()
 {
+    // Invalidate the pending/running attempt before the worker can run it.
     stopRequested.store(true);
+    connectAttempt.fetch_add(1);
 }
 
-void PM3Process::connectPM3(const QString& path, const QStringList args)
+quint64 PM3Process::beginConnect()
 {
     stopRequested.store(false);
+    return connectAttempt.fetch_add(1) + 1;
+}
+
+void PM3Process::connectPM3(quint64 attempt, const QString& path, const QStringList args)
+{
+    if(attempt != connectAttempt.load() || stopRequested.load())
+        return; // cancelled before the worker entered this slot
+
     QString result;
     Util::ClientType clientType = Util::CLIENTTYPE_OFFICIAL;
 
@@ -47,48 +57,103 @@ void PM3Process::connectPM3(const QString& path, const QStringList args)
     clientVersion.clear();
     firmwareVersion.clear();
     targetName.clear();
+    lastConnectMs = 0;
+    lastStartMs = 0;
+    lastVersionMs = 0;
+    lastHandshakeMs = 0;
+
+    // A second connect click must not leave the previous client running.
+    if(state() != QProcess::NotRunning)
+    {
+        kill();
+        waitForFinished(2000);
+    }
 
     // using "-f" option to make the client output flushed after every print.
     // single '\r' might appear. Don't use QProcess::Text there or '\r' is ignored.
     setRequiringOutput(true);
+    QElapsedTimer startTimer;
+    startTimer.start();
     start(path, args, QProcess::Unbuffered | QProcess::ReadWrite);
     if(!waitForStarted(10000))
     {
+        lastStartMs = startTimer.elapsed();
         setRequiringOutput(false);
+        qDebug() << "connect: client did not start:" << errorString();
+        emit PM3StatedChanged(false, QString(), attempt);
+        emit HWConnectFailed(tr("The client process did not start: %1").arg(errorString()), attempt);
+        return;
+    }
+    lastStartMs = startTimer.elapsed();
+
+    // Pipe mode has no startup prompt and no empty prompt after a command.
+    // Queue a version query and a unique "rem" marker immediately; the marker
+    // reply is the only completion boundary the GUI trusts.
+    const QString token = Util::makeCompletionToken("PM3GUI_CONNECT");
+    requiredOutput->clear();
+    QProcess::write(("hw version\nrem " + token + "\n").toLatin1());
+
+    QElapsedTimer handshakeTimer;
+    handshakeTimer.start();
+    bool versionSeen = false;
+    bool completed = false;
+    bool aborted = false;
+    QString failure;
+    while(true)
+    {
+        if(attempt != connectAttempt.load() || stopRequested.load())
+        {
+            aborted = true;
+            failure = tr("Connection cancelled");
+            break;
+        }
+
+        const QString clean = Util::stripAnsi(*requiredOutput);
+        if(!versionSeen && (clean.contains("[ Client ]") || clean.contains("Client....") || clean.contains("Iceman/")))
+        {
+            versionSeen = true;
+            lastVersionMs = handshakeTimer.elapsed();
+        }
+        if(Util::hasCompletionMarker(clean, token))
+        {
+            completed = true;
+            break;
+        }
+        if(state() == QProcess::NotRunning)
+        {
+            aborted = true;
+            failure = tr("The client exited during the handshake");
+            break;
+        }
+        if(handshakeTimer.elapsed() >= 10000)
+        {
+            failure = tr("Timed out waiting for the client version");
+            break;
+        }
+        waitForReadyRead(50);
+    }
+    lastHandshakeMs = handshakeTimer.elapsed();
+
+    if(!completed)
+    {
+        setRequiringOutput(false);
+        qDebug() << "connect failed:" << failure << "after" << lastHandshakeMs << "ms";
+        const bool userCancelled = aborted && (stopRequested.load() || attempt != connectAttempt.load());
+        stopProcess();
+        emit PM3StatedChanged(false, QString(), attempt);
+        if(!userCancelled)
+            emit HWConnectFailed(failure, attempt);
         return;
     }
 
-    // Wait for the client prompt (or the hardware version block) instead of
-    // assuming the first read already contains everything.
-    // 50 ms slices: a 200 ms slice per read is the granularity the user sees as
-    // "the connect takes ages" once the client has already printed the prompt.
-    QElapsedTimer startupTimer;
-    startupTimer.start();
-    auto waitForOutput = [this](const std::function<bool(const QString&)>& done, int timeoutMs) {
-        QElapsedTimer timer;
-        timer.start();
-        while(!done(*requiredOutput))
-        {
-            if(stopRequested.load() || state() == QProcess::NotRunning || timer.elapsed() >= timeoutMs)
-                return false;
-            waitForReadyRead(50);
-        }
-        return true;
-    };
-
-    waitForOutput([](const QString& out) { return out.contains("-->") && out.contains("\n"); }, 10000);
-    result = *requiredOutput;
-
-    // Ask for the version block. It works offline too (client version only).
-    const QString startupOutput = result;
-    requiredOutput->clear();
-    write("hw version\n");
-    waitForOutput([](const QString& out) { return Util::isPromptAtEnd(Util::stripAnsi(out)); }, 10000);
     result = *requiredOutput;
     setRequiringOutput(false);
-    lastConnectMs = startupTimer.elapsed();
-    qDebug() << "connect: client ready in" << lastConnectMs << "ms";
-    result = startupOutput + result;
+    lastConnectMs = lastStartMs + lastHandshakeMs;
+    qDebug() << "connect: start=" << lastStartMs << "ms version=" << lastVersionMs
+             << "ms boundary=" << lastHandshakeMs << "ms total=" << lastConnectMs << "ms";
+
+    if(attempt != connectAttempt.load() || stopRequested.load())
+        return;
 
     const QString clean = Util::stripAnsi(result);
     // Device present: "    Client.... v4.23346 ..."; offline: "Iceman/master/v4.23346-suspect ..."
@@ -118,25 +183,26 @@ void PM3Process::connectPM3(const QString& path, const QStringList args)
     const bool clientQtPlot = clean.contains("QT GUI support............ present");
 
     emit changeClientType(clientType);
-    emit PM3VersionInfo(clientVersion, firmwareVersion, targetName, mismatch, clientQtPlot);
+    emit PM3VersionInfo(clientVersion, firmwareVersion, targetName, mismatch, clientQtPlot, attempt);
 
     if(!firmwareVersion.isEmpty())
     {
-        emit PM3StatedChanged(true, firmwareVersion);
+        if(attempt == connectAttempt.load() && !stopRequested.load())
+            emit PM3StatedChanged(true, firmwareVersion, attempt);
     }
     else
     {
         qDebug() << "unexpected output:" << (clean.isEmpty() ? "(empty)" : clean);
-        emit HWConnectFailed();
-        kill();
+        stopProcess();
+        emit PM3StatedChanged(false, QString(), attempt);
+        if(attempt == connectAttempt.load() && !stopRequested.load())
+            emit HWConnectFailed(tr("The client reported no firmware version (offline?)"), attempt);
     }
-
-    setRequiringOutput(false);
 }
 
-void PM3Process::reconnectPM3()
+void PM3Process::reconnectPM3(quint64 attempt)
 {
-    connectPM3(currPath, currArgs);
+    connectPM3(attempt, currPath, currArgs);
 }
 
 void PM3Process::setRequiringOutput(bool st)
@@ -185,7 +251,7 @@ void PM3Process::onTimeout() //when the proxmark3 client is unexpectedly termina
 //    qDebug()<<portInfo->isBusy();
     if(!portInfo->isBusy())
     {
-        killPM3();
+        killPM3(connectAttempt.load());
     }
 }
 
@@ -225,10 +291,18 @@ void PM3Process::setWorkingDir(const QString& dir)
     this->setWorkingDirectory(dir);
 }
 
-void PM3Process::killPM3()
+void PM3Process::stopProcess()
 {
-    kill();
-    waitForFinished(2000);
-    emit PM3StatedChanged(false);
+    if(state() != QProcess::NotRunning)
+    {
+        kill();
+        waitForFinished(2000);
+    }
     setSerialListener(false);
+}
+
+void PM3Process::killPM3(quint64 attempt)
+{
+    stopProcess();
+    emit PM3StatedChanged(false, QString(), attempt);
 }

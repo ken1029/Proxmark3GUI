@@ -15,6 +15,7 @@
 class Mifare : public QObject
 {
     Q_OBJECT
+    friend class GuiTests;
 public:
     explicit Mifare(Ui::MainWindow *ui, Util *addr, QWidget *parent = nullptr);
 
