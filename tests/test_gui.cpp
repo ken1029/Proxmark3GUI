@@ -1872,6 +1872,56 @@ private slots:
         QCOMPARE(finished.last().at(0).value<Util::ExecResult>().status, Util::EXEC_CANCELLED);
     }
 
+    void workbenchRunsDictionaryTask()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString oldCwd = QDir::currentPath();
+        QDir::setCurrent(dir.path());
+        QSettings settings("GUIsettings.ini", QSettings::IniFormat);
+        settings.setValue("language/name", "en_US");
+        settings.sync();
+
+        MainWindow window;
+        window.initUI();
+        MfcWorkbench* workbench = window.findChild<MfcWorkbench*>("mfcWorkbench");
+        Util* util = window.findChild<Util*>();
+        QVERIFY(workbench != nullptr);
+        QVERIFY(util != nullptr);
+
+        util->setRunningState(true);
+        QObject::connect(util, &Util::write, util, [util](QString wire) {
+            const int remPos = wire.indexOf("rem ");
+            const QString token = remPos >= 0 ? wire.mid(remPos + 4).trimmed() : QString();
+            QTimer::singleShot(30, util, [util, token]() {
+                util->processOutput("-----+-----+--------------+---+--------------+----\n"
+                                    " Sec | Blk | key A        |res| key B        |res\n"
+                                    "-----+-----+--------------+---+--------------+----\n"
+                                    " 000 | 003 | FFFFFFFFFFFF | D | 1234567890AB | D \n"
+                                    " 001 | 007 | A0A1A2A3A4A5 | H | BBBBBBBBBBBB | 0 \n"
+                                    "-----+-----+--------------+---+--------------+----\n");
+                util->processOutput("[+] remark: " + token + "\n");
+            });
+        });
+
+        workbench->setDeviceReady(true);
+        QComboBox* methodBox = workbench->findChild<QComboBox*>("mfcMethodBox");
+        QVERIFY(methodBox != nullptr);
+        methodBox->setCurrentIndex(methodBox->findText("Dictionary (chk)"));
+        QVERIFY(QMetaObject::invokeMethod(workbench, "runSelectedMethod"));
+
+        QElapsedTimer timer;
+        timer.start();
+        while(workbench->isTaskActive() && timer.elapsed() < 3000)
+            QTest::qWait(20);
+        QVERIFY(!workbench->isTaskActive());
+        QCOMPARE(workbench->document().key(0, 'A').state, Mfc::KeyState::Verified);
+        QCOMPARE(workbench->document().key(0, 'B').state, Mfc::KeyState::Verified);
+        QCOMPARE(workbench->document().key(1, 'B').state, Mfc::KeyState::Unknown);
+        util->setRunningState(false);
+        QDir::setCurrent(oldCwd);
+    }
+
     void workbenchPageAndCompare()
     {
         QTemporaryDir dir;

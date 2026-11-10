@@ -310,6 +310,7 @@ void MfcWorkbench::buildUi()
 
     QGridLayout* controls = new QGridLayout();
     methodBox = new QComboBox(methodPage);
+    methodBox->setObjectName("mfcMethodBox");
     methodBox->addItem(tr("Known keys"), int(MfcRecovery::Method::KnownKeys));
     methodBox->addItem(tr("Dictionary (chk)"), int(MfcRecovery::Method::Dictionary));
     methodBox->addItem(tr("Automatic (autopwn)"), int(MfcRecovery::Method::AutoPwn));
@@ -320,6 +321,7 @@ void MfcWorkbench::buildUi()
     methodBox->addItem(tr("SEN (static encrypted nonce)"), int(MfcRecovery::Method::Sen));
     methodBox->addItem(tr("ISEN (diagnostics)"), int(MfcRecovery::Method::Isen));
     dictionaryEdit = new QLineEdit(methodPage);
+    dictionaryEdit->setObjectName("mfcDictionaryEdit");
     dictionaryEdit->setPlaceholderText(tr("Optional dictionary file (chk -f)"));
     includeDefaultsBox = new QCheckBox(tr("Include built-in default keys"), methodPage);
     includeDefaultsBox->setChecked(true);
@@ -334,7 +336,9 @@ void MfcWorkbench::buildUi()
     targetTypeBox->addItem("A", 'A');
     targetTypeBox->addItem("B", 'B');
     runButton = new QPushButton(tr("Run selected method"), methodPage);
+    runButton->setObjectName("mfcRunButton");
     cancelButton = new QPushButton(tr("Cancel task"), methodPage);
+    cancelButton->setObjectName("mfcCancelButton");
     cancelButton->setEnabled(false);
 
     controls->addWidget(new QLabel(tr("Method:"), methodPage), 0, 0);
