@@ -126,12 +126,6 @@ QColor diffColor(Mfc::DiffState state)
     return QColor(120, 120, 120);
 }
 
-const char* METHOD_KEYS[] =
-{
-    "known", "check", "autopwn", "nested", "staticnested",
-    "hardnested", "darkside", "sen", "isen"
-};
-
 } // namespace
 
 MfcWorkbench::MfcWorkbench(Util* util, Mifare* mifare, QWidget* parent)
@@ -659,7 +653,7 @@ void MfcWorkbench::refreshAdvice()
                                                 ? (item.preconditionUnverified ? tr("conditional") : tr("yes"))
                                                 : tr("no")));
         adviceTable->setItem(i, 2, readOnlyItem(item.reason));
-        adviceTable->setItem(i, 3, readOnlyItem(item.requires.join(QStringLiteral(", "))));
+        adviceTable->setItem(i, 3, readOnlyItem(item.requirements.join(QStringLiteral(", "))));
         adviceTable->item(i, 1)->setForeground(item.applicable
                                                ? (item.preconditionUnverified ? QColor(190, 130, 0) : QColor(0, 150, 90))
                                                : QColor(190, 40, 40));
@@ -1384,10 +1378,12 @@ void MfcWorkbench::writePlan()
     QHBoxLayout* buttons = new QHBoxLayout();
     QPushButton* previewButton = new QPushButton(tr("Read card && preview"), &dialog);
     QPushButton* writeButton = new QPushButton(tr("Write selected"), &dialog);
+    QPushButton* retryButton = new QPushButton(tr("Retry failed only"), &dialog);
     QPushButton* stopButton = new QPushButton(tr("Stop after current block"), &dialog);
     QPushButton* closeButton = new QPushButton(tr("Close"), &dialog);
     buttons->addWidget(previewButton);
     buttons->addWidget(writeButton);
+    buttons->addWidget(retryButton);
     buttons->addWidget(stopButton);
     buttons->addStretch(1);
     buttons->addWidget(closeButton);
@@ -1440,6 +1436,13 @@ void MfcWorkbench::writePlan()
         }
     });
 
+    connect(retryButton, &QPushButton::clicked, &dialog, [&]() {
+        for(int row = 0; row < table->rowCount(); row++)
+        {
+            const bool failed = table->item(row, 5)->text() == tr("failed");
+            table->item(row, 0)->setCheckState(failed ? Qt::Checked : Qt::Unchecked);
+        }
+    });
     connect(stopButton, &QPushButton::clicked, &dialog, [&]() {
         cancelRequested = true;
     });

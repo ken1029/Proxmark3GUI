@@ -1887,7 +1887,7 @@ Client buffer: saves the trace loaded or listed in the client (trace save --buff
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="526"/>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1863"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1872"/>
         <source>Idle</source>
         <translation type="unfinished">空闲</translation>
     </message>
@@ -1919,7 +1919,7 @@ Client buffer: saves the trace loaded or listed in the client (trace save --buff
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="554"/>
         <location filename="../src/ui/mfcworkbench.cpp" line="574"/>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1524"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1533"/>
         <source>verified</source>
         <translation type="unfinished"></translation>
     </message>
@@ -1931,7 +1931,8 @@ Client buffer: saves the trace loaded or listed in the client (trace save --buff
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="558"/>
         <location filename="../src/ui/mfcworkbench.cpp" line="576"/>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1529"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1448"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1538"/>
         <source>failed</source>
         <translation type="unfinished"></translation>
     </message>
@@ -1963,13 +1964,13 @@ Client buffer: saves the trace loaded or listed in the client (trace save --buff
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="639"/>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1423"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1425"/>
         <source>trailer</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="639"/>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1423"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1425"/>
         <source>data</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2011,12 +2012,12 @@ Client buffer: saves the trace loaded or listed in the client (trace save --buff
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="782"/>
         <location filename="../src/ui/mfcworkbench.cpp" line="1285"/>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1580"/>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1640"/>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1659"/>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1781"/>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1792"/>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1849"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1589"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1649"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1668"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1790"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1801"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1858"/>
         <source>Info</source>
         <translation type="unfinished">信息</translation>
     </message>
@@ -2034,8 +2035,8 @@ Client buffer: saves the trace loaded or listed in the client (trace save --buff
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="867"/>
         <location filename="../src/ui/mfcworkbench.cpp" line="1354"/>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1668"/>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1738"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1677"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1747"/>
         <source>Connect the Proxmark3 first</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2242,9 +2243,9 @@ Client buffer: saves the trace loaded or listed in the client (trace save --buff
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1358"/>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1498"/>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1501"/>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1549"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1507"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1510"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1558"/>
         <source>Write plan</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2290,189 +2291,194 @@ Client buffer: saves the trace loaded or listed in the client (trace save --buff
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1387"/>
-        <source>Stop after current block</source>
+        <source>Retry failed only</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1388"/>
+        <source>Stop after current block</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1389"/>
         <source>Close</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1426"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1428"/>
         <source>not checked</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1459"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1468"/>
         <source>no verified key</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1467"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1476"/>
         <source>unreadable</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1475"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1484"/>
         <source>same</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1480"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1489"/>
         <source>partially unknown</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1485"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1494"/>
         <source>different</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1498"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1507"/>
         <source>No block is selected.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1502"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1511"/>
         <source>Write %1 block(s) to the card? This cannot be undone.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1520"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1529"/>
         <source>writing...</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1542"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1551"/>
         <source>Write plan: %1 block(s) verified, %2 failed</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1563"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1572"/>
         <source>Save MIFARE Classic keys</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1564"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1573"/>
         <source>RRG client key.bin (*.bin);;Legacy GUI key.bin (*.bin);;Text key list (*.txt);;JSON (*.json)</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1585"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1594"/>
         <source>Saved keys to %1 (%2 layout)</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1586"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1595"/>
         <source>Keys saved</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1628"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1637"/>
         <source>Load MIFARE Classic keys</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1629"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1638"/>
         <source>Key files (*.bin *.txt *.json);;All files (*)</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1635"/>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1661"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1644"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1670"/>
         <source>Loaded keys from %1</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1644"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1653"/>
         <source>Key file layout</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1645"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1654"/>
         <source>This binary key file has two possible layouts. Which one is it?</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1646"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1655"/>
         <source>RRG/official client: all key A first, then all key B.
 Legacy GUI: A0 B0 A1 B1 ...</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1648"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1657"/>
         <source>RRG key.bin</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1649"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1658"/>
         <source>Legacy GUI</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1683"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1692"/>
         <source>Card information failed: the client is not available</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1710"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1719"/>
         <source>Card type</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1711"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1720"/>
         <source>The card is %1 but the document is %2. Change it?</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1731"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1740"/>
         <source>Card identified</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1775"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1784"/>
         <source>Load dump A</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1776"/>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1787"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1785"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1796"/>
         <source>Dumps (*.bin *.dump *.eml *.json *.txt);;All files (*)</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1786"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1795"/>
         <source>Load dump B</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1799"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1808"/>
         <source>Load both dump A and dump B first</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1812"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1821"/>
         <source>Load and compare two dumps first</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1815"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1824"/>
         <source>Export comparison report</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1817"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1826"/>
         <source>Markdown (*.md);;CSV (*.csv);;Text (*.txt)</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1849"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1858"/>
         <source>Failed to write %1</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1852"/>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1861"/>
         <source>Report saved to %1</source>
         <translation type="unfinished"></translation>
     </message>

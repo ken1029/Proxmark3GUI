@@ -1509,6 +1509,44 @@ private slots:
         QCOMPARE(fromJson.sha256(), doc.sha256());
     }
 
+    void mfcOfficialJsonImport()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        QJsonObject root;
+        root["FileType"] = "mfc v2";
+        QJsonObject card;
+        card["UID"] = "11223344";
+        root["Card"] = card;
+        QJsonObject blocks;
+        for(int i = 0; i < 64; i++)
+            blocks[QString::number(i)] = QString("%1").arg(i, 32, 16, QLatin1Char('0')).toUpper();
+        root["blocks"] = blocks;
+        QJsonObject sectors;
+        QJsonObject sector0;
+        sector0["KeyA"] = "FFFFFFFFFFFF";
+        sector0["KeyB"] = "1234567890AB";
+        sectors["0"] = sector0;
+        root["SectorKeys"] = sectors;
+
+        const QString path = dir.filePath("official.json");
+        QFile file(path);
+        QVERIFY(file.open(QFile::WriteOnly));
+        file.write(QJsonDocument(root).toJson());
+        file.close();
+
+        Mfc::Document doc;
+        const Mfc::IoResult result = Mfc::Document::loadDataFile(path, "auto", &doc);
+        QVERIFY2(result.ok, qPrintable(result.error));
+        QCOMPARE(doc.cardType(), Mfc::CardType::M1K);
+        QCOMPARE(doc.uid, QString("11223344"));
+        QCOMPARE(doc.blockHex(1), QString("00000000000000000000000000000001"));
+        QCOMPARE(doc.blockState(1), Mfc::BlockState::Read);
+        QCOMPARE(doc.key(0, 'A').value, QString("FFFFFFFFFFFF"));
+        QCOMPARE(doc.key(0, 'B').value, QString("1234567890AB"));
+        QCOMPARE(doc.key(0, 'A').state, Mfc::KeyState::Pending);
+    }
+
     void mfcImportValidation()
     {
         QTemporaryDir dir;

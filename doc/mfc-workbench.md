@@ -38,7 +38,7 @@
 |---|---|---|
 | `.bin` / `.dump` | 必須是 320／1024／2048／4096 bytes，依大小判定卡型 | 任何未讀 block 都會拒絕；除非使用者明確同意以 00 佔位（會警告） |
 | `.eml` / `.txt` | 每個 block 一行 32 個 hex／`?`；接受 CRLF；行數必須是 20／64／128／256 | 未知 block 寫成 32 個 `?` |
-| `.json` | `mfc-document` v1；保留 block/key 狀態與來源 | 完整文件，適合備份與比較 |
+| `.json` | `mfc-document` v1；另可讀官方 client 的 `FileType: mfc v2/v3` dump（`blocks` + `SectorKeys`） | 完整文件，適合備份與比較 |
 
 JSON 備份旁會另寫 `<檔名>.sha256`。比較報告可輸出 Markdown 或 CSV。
 
@@ -126,5 +126,5 @@ fixture／mock 只能證明狀態機與解析，不代表實體卡恢復成功�
 - 未修改或重刷韌體；不支援已被裁掉的協定（Hitag、iCLASS、ISO15693、DESFire 模擬等）。
 - 未取得 r3 在原生 Windows、不同 DPI 的實機截圖；視覺驗收仍以 Windows 1366×768、1920×1080、100%／125%／150% 為準。
 - Hardnested 的離線檔案續算、nonce 檔管理與 trace Crypto1 解碼仍屬後續項目；本分支只包裝 client 已提供的命令與結果。
-- 寫入計畫不提供「只重試失敗 block」的獨立按鈕；重新開啟計畫時 failed block 仍為未驗證，需重新勾選。
+- 寫入計畫的「Retry failed only」只會勾選上一輪標記為 failed 的 block；不可讀／未知仍需先解決金鑰或卡片問題。
 - 4K 的 16-block sector 與 Mini 的 5-sector 對應已由單元測試覆蓋，但實體卡仍需驗證。

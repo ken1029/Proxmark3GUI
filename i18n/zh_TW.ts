@@ -1086,27 +1086,27 @@ The "&lt;client dir&gt;" will be replaced by the directory of the "Client Path"<
     </message>
     <message>
         <source>Failed to start the client</source>
-        <translation type="vanished">無法啟動客戶端</translation>
+        <translation>無法啟動客戶端</translation>
     </message>
     <message>
         <source>The client process did not start: %1</source>
-        <translation type="vanished">客戶端程序無法啟動：%1</translation>
+        <translation>客戶端程序無法啟動：%1</translation>
     </message>
     <message>
         <source>Connection cancelled</source>
-        <translation type="vanished">連線已取消</translation>
+        <translation>連線已取消</translation>
     </message>
     <message>
         <source>The client exited during the handshake</source>
-        <translation type="vanished">客戶端在握手期間結束</translation>
+        <translation>客戶端在握手期間結束</translation>
     </message>
     <message>
         <source>Timed out waiting for the client version</source>
-        <translation type="vanished">等待客戶端版本逾時</translation>
+        <translation>等待客戶端版本逾時</translation>
     </message>
     <message>
         <source>The client reported no firmware version (offline?)</source>
-        <translation type="vanished">客戶端未回報韌體版本（離線？）</translation>
+        <translation>客戶端未回報韌體版本（離線？）</translation>
     </message>
     <message>
         <location filename="../src/ui/mainwindow.cpp" line="352" />
@@ -1180,7 +1180,7 @@ The "&lt;client dir&gt;" will be replaced by the directory of the "Client Path"<
     <message>
         <location filename="../src/ui/mainwindow.cpp" line="68" />
         <source>MFC workbench</source>
-        <translation type="unfinished">MFC 工作台</translation>
+        <translation>MFC 工作台</translation>
     </message>
     <message>
         <location filename="../src/ui/mainwindow.cpp" line="243" />
@@ -1201,29 +1201,29 @@ The "&lt;client dir&gt;" will be replaced by the directory of the "Client Path"<
     <message>
         <location filename="../src/ui/mainwindow.cpp" line="854" />
         <source>Key file layout</source>
-        <translation type="unfinished">金鑰檔排列</translation>
+        <translation>金鑰檔排列</translation>
     </message>
     <message>
         <location filename="../src/ui/mainwindow.cpp" line="855" />
         <source>This binary key file has two possible layouts. Which one is it?</source>
-        <translation type="unfinished">這個二進位金鑰檔有兩種可能排列，請選擇正確的一種。</translation>
+        <translation>這個二進位金鑰檔有兩種可能排列，請選擇正確的一種。</translation>
     </message>
     <message>
         <location filename="../src/ui/mainwindow.cpp" line="856" />
         <source>RRG/official client: all key A first, then all key B.
 Legacy GUI: A0 B0 A1 B1 ...</source>
-        <translation type="unfinished">RRG／官方 client：先全部 Key A，再全部 Key B。
+        <translation>RRG／官方 client：先全部 Key A，再全部 Key B。
 舊版 GUI：A0 B0 A1 B1 …</translation>
     </message>
     <message>
         <location filename="../src/ui/mainwindow.cpp" line="858" />
         <source>RRG key.bin</source>
-        <translation type="unfinished">RRG key.bin</translation>
+        <translation>RRG key.bin</translation>
     </message>
     <message>
         <location filename="../src/ui/mainwindow.cpp" line="859" />
         <source>Legacy GUI</source>
-        <translation type="unfinished">舊版 GUI</translation>
+        <translation>舊版 GUI</translation>
     </message>
     <message>
         <location filename="../src/ui/mainwindow.cpp" line="1045" />
@@ -1475,1007 +1475,1013 @@ Client buffer: saves the trace loaded or listed in the client (trace save --buff
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="158" />
         <source>Card / document</source>
-        <translation type="unfinished">卡片／文件</translation>
+        <translation>卡片／文件</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="160" />
         <source>No document</source>
-        <translation type="unfinished">尚無文件</translation>
+        <translation>尚無文件</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="167" />
         <source>Mini</source>
-        <translation type="unfinished">Mini</translation>
+        <translation>Mini</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="168" />
         <source>1K</source>
-        <translation type="unfinished">1K</translation>
+        <translation>1K</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="169" />
         <source>2K</source>
-        <translation type="unfinished">2K</translation>
+        <translation>2K</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="170" />
         <source>4K</source>
-        <translation type="unfinished">4K</translation>
+        <translation>4K</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="171" />
         <source>Identify card</source>
-        <translation type="unfinished">辨識卡片</translation>
+        <translation>辨識卡片</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="172" />
         <source>Nonce diagnostics</source>
-        <translation type="unfinished">Nonce 診斷</translation>
+        <translation>Nonce 診斷</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="173" />
         <source>Import from data page</source>
-        <translation type="unfinished">從資料頁匯入</translation>
+        <translation>從資料頁匯入</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="174" />
         <source>Apply to data page</source>
-        <translation type="unfinished">套用到資料頁</translation>
+        <translation>套用到資料頁</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="177" />
         <source>Card type:</source>
-        <translation type="unfinished">卡型：</translation>
+        <translation>卡型：</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="181" />
         <source>UID:</source>
-        <translation type="unfinished">UID：</translation>
+        <translation>UID：</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="183" />
         <source>Nonce:</source>
-        <translation type="unfinished">Nonce：</translation>
+        <translation>Nonce：</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="211" />
         <location filename="../src/ui/mfcworkbench.cpp" line="258" />
         <source>Sector</source>
-        <translation type="unfinished">Sector</translation>
+        <translation>Sector</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="211" />
         <source>Key A</source>
-        <translation type="unfinished">Key A</translation>
+        <translation>Key A</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="211" />
         <source>A state</source>
-        <translation type="unfinished">A 狀態</translation>
+        <translation>A 狀態</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="211" />
         <source>A source</source>
-        <translation type="unfinished">A 來源</translation>
+        <translation>A 來源</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="212" />
         <source>Key B</source>
-        <translation type="unfinished">Key B</translation>
+        <translation>Key B</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="212" />
         <source>B state</source>
-        <translation type="unfinished">B 狀態</translation>
+        <translation>B 狀態</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="212" />
         <source>B source</source>
-        <translation type="unfinished">B 來源</translation>
+        <translation>B 來源</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="212" />
         <location filename="../src/ui/mfcworkbench.cpp" line="293" />
         <source>Note</source>
-        <translation type="unfinished">備註</translation>
+        <translation>備註</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="224" />
         <source>Load keys...</source>
-        <translation type="unfinished">載入金鑰…</translation>
+        <translation>載入金鑰…</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="225" />
         <source>Save keys...</source>
-        <translation type="unfinished">儲存金鑰…</translation>
+        <translation>儲存金鑰…</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="226" />
         <source>Verify known keys</source>
-        <translation type="unfinished">驗證已知金鑰</translation>
+        <translation>驗證已知金鑰</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="232" />
         <source>Keys &amp;&amp; access</source>
-        <translation type="unfinished">金鑰與權限</translation>
+        <translation>金鑰與權限</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="238" />
         <source>Show:</source>
-        <translation type="unfinished">顯示：</translation>
+        <translation>顯示：</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="240" />
         <source>All blocks</source>
-        <translation type="unfinished">全部區塊</translation>
+        <translation>全部區塊</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="241" />
         <source>Unknown / failed</source>
-        <translation type="unfinished">未知／失敗</translation>
+        <translation>未知／失敗</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="242" />
         <source>Modified</source>
-        <translation type="unfinished">已修改</translation>
+        <translation>已修改</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="243" />
         <source>Readable</source>
-        <translation type="unfinished">可讀取</translation>
+        <translation>可讀取</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="246" />
         <source>Read missing blocks</source>
-        <translation type="unfinished">讀取缺漏區塊</translation>
+        <translation>讀取缺漏區塊</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="247" />
         <source>Retry unknown blocks</source>
-        <translation type="unfinished">重試未知區塊</translation>
+        <translation>重試未知區塊</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="248" />
         <source>Save backup...</source>
-        <translation type="unfinished">儲存備份…</translation>
+        <translation>儲存備份…</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="249" />
         <source>Write plan...</source>
-        <translation type="unfinished">寫入計畫…</translation>
+        <translation>寫入計畫…</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="258" />
         <location filename="../src/ui/mfcworkbench.cpp" line="293" />
         <location filename="../src/ui/mfcworkbench.cpp" line="1374" />
         <source>Block</source>
-        <translation type="unfinished">塊</translation>
+        <translation>塊</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="258" />
         <location filename="../src/ui/mfcworkbench.cpp" line="1374" />
         <source>Type</source>
-        <translation type="unfinished">類型</translation>
+        <translation>類型</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="258" />
         <source>Data (hex)</source>
-        <translation type="unfinished">資料（hex）</translation>
+        <translation>資料（hex）</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="258" />
         <location filename="../src/ui/mfcworkbench.cpp" line="293" />
         <location filename="../src/ui/mfcworkbench.cpp" line="1375" />
         <source>State</source>
-        <translation type="unfinished">狀態</translation>
+        <translation>狀態</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="267" />
         <source>Data / backup</source>
-        <translation type="unfinished">資料／備份</translation>
+        <translation>資料／備份</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="275" />
         <source>Load A...</source>
-        <translation type="unfinished">載入 A…</translation>
+        <translation>載入 A…</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="276" />
         <source>Load B...</source>
-        <translation type="unfinished">載入 B…</translation>
+        <translation>載入 B…</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="277" />
         <source>Compare A / B</source>
-        <translation type="unfinished">比較 A／B</translation>
+        <translation>比較 A／B</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="278" />
         <source>Export report...</source>
-        <translation type="unfinished">匯出報告…</translation>
+        <translation>匯出報告…</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="279" />
         <source>Only show differences</source>
-        <translation type="unfinished">只顯示差異</translation>
+        <translation>只顯示差異</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="280" />
         <source>A:</source>
-        <translation type="unfinished">A：</translation>
+        <translation>A：</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="283" />
         <source>B:</source>
-        <translation type="unfinished">B：</translation>
+        <translation>B：</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="293" />
         <source>A</source>
-        <translation type="unfinished">A</translation>
+        <translation>A</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="293" />
         <source>B</source>
-        <translation type="unfinished">B</translation>
+        <translation>B</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="301" />
         <source>Compare</source>
-        <translation type="unfinished">比較</translation>
+        <translation>比較</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="309" />
         <source>Method</source>
-        <translation type="unfinished">方法</translation>
+        <translation>方法</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="309" />
         <source>Applicable</source>
-        <translation type="unfinished">適用</translation>
+        <translation>適用</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="309" />
         <source>Why</source>
-        <translation type="unfinished">說明</translation>
+        <translation>說明</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="309" />
         <source>Requires</source>
-        <translation type="unfinished">缺少前提</translation>
+        <translation>缺少前提</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="319" />
         <source>Known keys</source>
-        <translation type="unfinished">已知金鑰</translation>
+        <translation>已知金鑰</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="320" />
         <source>Dictionary (chk)</source>
-        <translation type="unfinished">字典檢查（chk）</translation>
+        <translation>字典檢查（chk）</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="321" />
         <source>Automatic (autopwn)</source>
-        <translation type="unfinished">自動流程（autopwn）</translation>
+        <translation>自動流程（autopwn）</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="322" />
         <source>Nested</source>
-        <translation type="unfinished">Nested</translation>
+        <translation>Nested</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="323" />
         <source>Static nested</source>
-        <translation type="unfinished">Static nested</translation>
+        <translation>Static nested</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="324" />
         <source>Hardnested</source>
-        <translation type="unfinished">Hardnested</translation>
+        <translation>Hardnested</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="325" />
         <source>Darkside</source>
-        <translation type="unfinished">Darkside</translation>
+        <translation>Darkside</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="326" />
         <source>SEN (static encrypted nonce)</source>
-        <translation type="unfinished">SEN（靜態加密 nonce）</translation>
+        <translation>SEN（靜態加密 nonce）</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="327" />
         <source>ISEN (diagnostics)</source>
-        <translation type="unfinished">ISEN（診斷）</translation>
+        <translation>ISEN（診斷）</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="329" />
         <source>Optional dictionary file (chk -f)</source>
-        <translation type="unfinished">自訂字典檔（chk -f，可留空）</translation>
+        <translation>自訂字典檔（chk -f，可留空）</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="330" />
         <source>Include built-in default keys</source>
-        <translation type="unfinished">包含內建預設金鑰</translation>
+        <translation>包含內建預設金鑰</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="342" />
         <source>Run selected method</source>
-        <translation type="unfinished">執行所選方法</translation>
+        <translation>執行所選方法</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="343" />
         <location filename="../src/ui/mfcworkbench.cpp" line="1014" />
         <source>Cancel task</source>
-        <translation type="unfinished">取消任務</translation>
+        <translation>取消任務</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="346" />
         <source>Method:</source>
-        <translation type="unfinished">方法：</translation>
+        <translation>方法：</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="348" />
         <source>Dictionary:</source>
-        <translation type="unfinished">字典：</translation>
+        <translation>字典：</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="351" />
         <source>Known sector:</source>
-        <translation type="unfinished">已知 sector：</translation>
+        <translation>已知 sector：</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="354" />
         <source>Target sector:</source>
-        <translation type="unfinished">目標 sector：</translation>
+        <translation>目標 sector：</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="360" />
         <source>Key recovery / decryption</source>
-        <translation type="unfinished">金鑰恢復／解密</translation>
+        <translation>金鑰恢復／解密</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="368" />
         <source>Task log</source>
-        <translation type="unfinished">任務日誌</translation>
+        <translation>任務日誌</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="371" />
         <source>Clear log</source>
-        <translation type="unfinished">清除日誌</translation>
+        <translation>清除日誌</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="383" />
         <source>Change card type</source>
-        <translation type="unfinished">變更卡型</translation>
+        <translation>變更卡型</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="384" />
         <source>Changing the card type clears the current document. Continue?</source>
-        <translation type="unfinished">變更卡型會清除目前文件，確定繼續？</translation>
+        <translation>變更卡型會清除目前文件，確定繼續？</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="471" />
         <source>Imported the data page into the workbench document</source>
-        <translation type="unfinished">已將資料頁匯入工作台文件</translation>
+        <translation>已將資料頁匯入工作台文件</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="501" />
         <source>Stage: %1 | %2 s</source>
-        <translation type="unfinished">階段：%1 ｜ 已執行 %2 秒</translation>
+        <translation>階段：%1 ｜ 已執行 %2 秒</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="502" />
         <source>running</source>
-        <translation type="unfinished">執行中</translation>
+        <translation>執行中</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="517" />
         <source>(not read)</source>
-        <translation type="unfinished">（尚未讀取）</translation>
+        <translation>（尚未讀取）</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="519" />
         <source>Verified keys %1/%2 | pending %3 | unknown %4</source>
-        <translation type="unfinished">已驗證金鑰 %1/%2 ｜ 候選 %3 ｜ 未知 %4</translation>
+        <translation>已驗證金鑰 %1/%2 ｜ 候選 %3 ｜ 未知 %4</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="522" />
         <source>Read blocks %1/%2 | unknown %3 | modified %4</source>
-        <translation type="unfinished">已讀區塊 %1/%2 ｜ 未知 %3 ｜ 已修改 %4</translation>
+        <translation>已讀區塊 %1/%2 ｜ 未知 %3 ｜ 已修改 %4</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="526" />
-        <location filename="../src/ui/mfcworkbench.cpp" line="1863" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1872" />
         <source>Idle</source>
-        <translation type="unfinished">空閒</translation>
+        <translation>空閒</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="536" />
         <source>normal PRNG</source>
-        <translation type="unfinished">一般 PRNG</translation>
+        <translation>一般 PRNG</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="538" />
         <source>static nonce</source>
-        <translation type="unfinished">靜態 nonce</translation>
+        <translation>靜態 nonce</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="540" />
         <source>static nonce (even when nested)</source>
-        <translation type="unfinished">靜態 nonce（nested 時亦然）</translation>
+        <translation>靜態 nonce（nested 時亦然）</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="542" />
         <source>static encrypted nonce</source>
-        <translation type="unfinished">靜態加密 nonce</translation>
+        <translation>靜態加密 nonce</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="546" />
         <source>unknown (run diagnostics)</source>
-        <translation type="unfinished">未知（請執行診斷）</translation>
+        <translation>未知（請執行診斷）</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="554" />
         <location filename="../src/ui/mfcworkbench.cpp" line="574" />
-        <location filename="../src/ui/mfcworkbench.cpp" line="1524" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1533" />
         <source>verified</source>
-        <translation type="unfinished">已驗證</translation>
+        <translation>已驗證</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="556" />
         <source>candidate</source>
-        <translation type="unfinished">候選</translation>
+        <translation>候選</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="558" />
         <location filename="../src/ui/mfcworkbench.cpp" line="576" />
-        <location filename="../src/ui/mfcworkbench.cpp" line="1529" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1448" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1538" />
         <source>failed</source>
-        <translation type="unfinished">失敗</translation>
+        <translation>失敗</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="562" />
         <location filename="../src/ui/mfcworkbench.cpp" line="580" />
         <source>unknown</source>
-        <translation type="unfinished">未知</translation>
+        <translation>未知</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="570" />
         <source>read</source>
-        <translation type="unfinished">已讀取</translation>
+        <translation>已讀取</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="572" />
         <source>modified</source>
-        <translation type="unfinished">已修改</translation>
+        <translation>已修改</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="604" />
         <source>readable</source>
-        <translation type="unfinished">可讀取</translation>
+        <translation>可讀取</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="606" />
         <source>needs recovery / verification</source>
-        <translation type="unfinished">需要恢復／驗證</translation>
+        <translation>需要恢復／驗證</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="639" />
-        <location filename="../src/ui/mfcworkbench.cpp" line="1423" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1425" />
         <source>trailer</source>
-        <translation type="unfinished">trailer</translation>
+        <translation>trailer</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="639" />
-        <location filename="../src/ui/mfcworkbench.cpp" line="1423" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1425" />
         <source>data</source>
-        <translation type="unfinished">資料</translation>
+        <translation>資料</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="659" />
         <source>conditional</source>
-        <translation type="unfinished">有條件</translation>
+        <translation>有條件</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="659" />
         <source>yes</source>
-        <translation type="unfinished">是</translation>
+        <translation>是</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="660" />
         <source>no</source>
-        <translation type="unfinished">否</translation>
+        <translation>否</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="692" />
         <source>Compare: same %1 | different %2 | unknown %3 | incomparable %4</source>
-        <translation type="unfinished">比較：相同 %1 ｜ 不同 %2 ｜ 未知 %3 ｜ 無法比較 %4</translation>
+        <translation>比較：相同 %1 ｜ 不同 %2 ｜ 未知 %3 ｜ 無法比較 %4</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="721" />
         <source>A key must be 12 hex symbols</source>
-        <translation type="unfinished">金鑰必須是 12 個 hex 字元</translation>
+        <translation>金鑰必須是 12 個 hex 字元</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="747" />
         <source>A block must be 32 hex symbols ('?' is allowed for unknown bytes)</source>
-        <translation type="unfinished">區塊必須是 32 個 hex 字元（未知位元組可用 ?）</translation>
+        <translation>區塊必須是 32 個 hex 字元（未知位元組可用 ?）</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="764" />
         <source> (not applicable now)</source>
-        <translation type="unfinished">（目前不適用）</translation>
+        <translation>（目前不適用）</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="782" />
         <location filename="../src/ui/mfcworkbench.cpp" line="1285" />
-        <location filename="../src/ui/mfcworkbench.cpp" line="1580" />
-        <location filename="../src/ui/mfcworkbench.cpp" line="1640" />
-        <location filename="../src/ui/mfcworkbench.cpp" line="1659" />
-        <location filename="../src/ui/mfcworkbench.cpp" line="1781" />
-        <location filename="../src/ui/mfcworkbench.cpp" line="1792" />
-        <location filename="../src/ui/mfcworkbench.cpp" line="1849" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1589" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1649" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1668" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1790" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1801" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1858" />
         <source>Info</source>
-        <translation type="unfinished">資訊</translation>
+        <translation>資訊</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="818" />
         <location filename="../src/ui/mfcworkbench.cpp" line="834" />
         <source>Sector %1 key %2 is not verified; verify a known key first.</source>
-        <translation type="unfinished">Sector %1 的 Key %2 尚未驗證，請先驗證已知金鑰。</translation>
+        <translation>Sector %1 的 Key %2 尚未驗證，請先驗證已知金鑰。</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="842" />
         <source>Sector %1 key %2 is already verified.</source>
-        <translation type="unfinished">Sector %1 的 Key %2 已經驗證。</translation>
+        <translation>Sector %1 的 Key %2 已經驗證。</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="867" />
         <location filename="../src/ui/mfcworkbench.cpp" line="1354" />
-        <location filename="../src/ui/mfcworkbench.cpp" line="1668" />
-        <location filename="../src/ui/mfcworkbench.cpp" line="1738" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1677" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1747" />
         <source>Connect the Proxmark3 first</source>
-        <translation type="unfinished">請先連線 Proxmark3</translation>
+        <translation>請先連線 Proxmark3</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="872" />
         <source>Another device task is still running</source>
-        <translation type="unfinished">仍有其他設備任務在執行</translation>
+        <translation>仍有其他設備任務在執行</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="877" />
         <source>The selected method has no command for this client</source>
-        <translation type="unfinished">所選方法在此 client 沒有對應命令</translation>
+        <translation>所選方法在此 client 沒有對應命令</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="897" />
         <source>The client is busy</source>
-        <translation type="unfinished">client 忙碌中</translation>
+        <translation>client 忙碌中</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="898" />
         <source>The client is busy with another command</source>
-        <translation type="unfinished">client 正在執行其他命令</translation>
+        <translation>client 正在執行其他命令</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="901" />
         <source>Running %1...</source>
-        <translation type="unfinished">正在執行 %1…</translation>
+        <translation>正在執行 %1…</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="935" />
         <source>Completed: %1 key(s) verified, %2 still unknown</source>
-        <translation type="unfinished">完成：已驗證 %1 把金鑰，仍有 %2 把未知</translation>
+        <translation>完成：已驗證 %1 把金鑰，仍有 %2 把未知</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="941" />
         <source>Method finished without a usable key</source>
-        <translation type="unfinished">方法結束，但沒有取得可用金鑰</translation>
+        <translation>方法結束，但沒有取得可用金鑰</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="946" />
         <location filename="../src/ui/mfcworkbench.cpp" line="970" />
         <source>Cancelled; completed work was kept</source>
-        <translation type="unfinished">已取消；已完成的结果會保留</translation>
+        <translation>已取消；已完成的结果會保留</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="950" />
         <source>Client ended before the method completed</source>
-        <translation type="unfinished">client 在方法完成前結束</translation>
+        <translation>client 在方法完成前結束</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="954" />
         <source>Timed out; no result is claimed</source>
-        <translation type="unfinished">逾時；不宣稱已有結果</translation>
+        <translation>逾時；不宣稱已有結果</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="958" />
         <source>The method reported a failure</source>
-        <translation type="unfinished">方法回報失敗</translation>
+        <translation>方法回報失敗</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="963" />
         <source>The client is not available</source>
-        <translation type="unfinished">client 無法使用</translation>
+        <translation>client 無法使用</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="994" />
         <source>Parser: %1</source>
-        <translation type="unfinished">解析：%1</translation>
+        <translation>解析：%1</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="996" />
         <source>Merge: %1</source>
-        <translation type="unfinished">合併：%1</translation>
+        <translation>合併：%1</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="999" />
         <source>The client reported a failure in its output</source>
-        <translation type="unfinished">client 輸出中出現失敗訊息</translation>
+        <translation>client 輸出中出現失敗訊息</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1010" />
         <source>Stopping after the current block...</source>
-        <translation type="unfinished">將在目前區塊完成後停止…</translation>
+        <translation>將在目前區塊完成後停止…</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1015" />
         <source>How should the running task be stopped?</source>
-        <translation type="unfinished">要如何停止目前任務？</translation>
+        <translation>要如何停止目前任務？</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1016" />
         <source>Stop waiting keeps the client and the device state; completed keys are kept. Abort client disconnects the client and reconnects it, which is the only safe way to stop a long command.</source>
-        <translation type="unfinished">「停止等待」保留 client 與設備狀態，已完成的金鑰會保留；「中止 client」會斷線並重新連線，這是停止長命令唯一安全的方式。</translation>
+        <translation>「停止等待」保留 client 與設備狀態，已完成的金鑰會保留；「中止 client」會斷線並重新連線，這是停止長命令唯一安全的方式。</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1019" />
         <source>Stop waiting</source>
-        <translation type="unfinished">停止等待</translation>
+        <translation>停止等待</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1020" />
         <source>Abort client</source>
-        <translation type="unfinished">中止 client</translation>
+        <translation>中止 client</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1031" />
         <source>Stopped waiting; the client may still be executing. Reconnect before the next task.</source>
-        <translation type="unfinished">已停止等待；client 可能仍在執行，請重新連線後再進行下一個任務。</translation>
+        <translation>已停止等待；client 可能仍在執行，請重新連線後再進行下一個任務。</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1056" />
         <source>No candidate key to verify</source>
-        <translation type="unfinished">沒有可驗證的候選金鑰</translation>
+        <translation>沒有可驗證的候選金鑰</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1070" />
         <source>Verify sector %1 key %2: %3</source>
-        <translation type="unfinished">驗證 sector %1 Key %2：%3</translation>
+        <translation>驗證 sector %1 Key %2：%3</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1086" />
         <source>Verification stopped; completed results were kept</source>
-        <translation type="unfinished">驗證已停止；已完成的结果會保留</translation>
+        <translation>驗證已停止；已完成的结果會保留</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1087" />
         <source>Verification finished: %1 verified</source>
-        <translation type="unfinished">驗證完成：已驗證 %1 把</translation>
+        <translation>驗證完成：已驗證 %1 把</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1105" />
         <source>  failed: %1</source>
-        <translation type="unfinished">  失敗：%1</translation>
+        <translation>  失敗：%1</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1151" />
         <source>client is not running</source>
-        <translation type="unfinished">client 未執行</translation>
+        <translation>client 未執行</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1152" />
         <source>read failed or timed out</source>
-        <translation type="unfinished">讀取失敗或逾時</translation>
+        <translation>讀取失敗或逾時</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1208" />
         <source>Block %1: %2</source>
-        <translation type="unfinished">區塊 %1：%2</translation>
+        <translation>區塊 %1：%2</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1246" />
         <source>Read %1 block(s), %2 failed, %3 unknown remain</source>
-        <translation type="unfinished">已讀 %1 個區塊，%2 個失敗，仍有 %3 個未知</translation>
+        <translation>已讀 %1 個區塊，%2 個失敗，仍有 %3 個未知</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1259" />
         <source>Save MIFARE Classic backup</source>
-        <translation type="unfinished">儲存 MIFARE Classic 備份</translation>
+        <translation>儲存 MIFARE Classic 備份</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1260" />
         <source>JSON document (*.json);;Text EML (*.eml);;Raw binary (*.bin)</source>
-        <translation type="unfinished">JSON 文件 (*.json);;文字 EML (*.eml);;原始二進位 (*.bin)</translation>
+        <translation>JSON 文件 (*.json);;文字 EML (*.eml);;原始二進位 (*.bin)</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1273" />
         <source>Incomplete backup</source>
-        <translation type="unfinished">備份不完整</translation>
+        <translation>備份不完整</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1274" />
         <source>%1 block(s) were never read. A raw binary file cannot represent unknown data and would contain zeros. Continue?</source>
-        <translation type="unfinished">有 %1 個區塊從未讀取。原始二進位檔無法表示未知資料，會寫成 00。確定繼續？</translation>
+        <translation>有 %1 個區塊從未讀取。原始二進位檔無法表示未知資料，會寫成 00。確定繼續？</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1295" />
         <source>Saved %1 (sha256 %2)</source>
-        <translation type="unfinished">已儲存 %1（sha256 %2）</translation>
+        <translation>已儲存 %1（sha256 %2）</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1296" />
         <source>Backup saved; sha256 %1</source>
-        <translation type="unfinished">備份已儲存；sha256 %1</translation>
+        <translation>備份已儲存；sha256 %1</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1307" />
         <source>no verified key for sector %1</source>
-        <translation type="unfinished">sector %1 沒有已驗證金鑰</translation>
+        <translation>sector %1 沒有已驗證金鑰</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1326" />
         <source>write failed or timed out</source>
-        <translation type="unfinished">寫入失敗或逾時</translation>
+        <translation>寫入失敗或逾時</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1337" />
         <source>write ok, read-back failed: %1</source>
-        <translation type="unfinished">寫入成功，但讀回失敗：%1</translation>
+        <translation>寫入成功，但讀回失敗：%1</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1343" />
         <source>read-back mismatch</source>
-        <translation type="unfinished">讀回值不一致</translation>
+        <translation>讀回值不一致</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1358" />
-        <location filename="../src/ui/mfcworkbench.cpp" line="1498" />
-        <location filename="../src/ui/mfcworkbench.cpp" line="1501" />
-        <location filename="../src/ui/mfcworkbench.cpp" line="1549" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1507" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1510" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1558" />
         <source>Write plan</source>
-        <translation type="unfinished">寫入計畫</translation>
+        <translation>寫入計畫</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1361" />
         <source>Only complete blocks are written. Block 0 and trailers are excluded unless you explicitly include them.</source>
-        <translation type="unfinished">只會寫入完整區塊。Block 0 與 sector trailer 預設排除，除非明確勾選。</translation>
+        <translation>只會寫入完整區塊。Block 0 與 sector trailer 預設排除，除非明確勾選。</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1366" />
         <source>Include block 0 (UID/manufacturer)</source>
-        <translation type="unfinished">包含 Block 0（UID／製造商資料）</translation>
+        <translation>包含 Block 0（UID／製造商資料）</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1367" />
         <source>Include sector trailers (keys / access bits)</source>
-        <translation type="unfinished">包含 sector trailer（金鑰／存取位元）</translation>
+        <translation>包含 sector trailer（金鑰／存取位元）</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1374" />
         <source>Write</source>
-        <translation type="unfinished">寫</translation>
+        <translation>寫</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1375" />
         <source>Document</source>
-        <translation type="unfinished">文件</translation>
+        <translation>文件</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1375" />
         <source>Card</source>
-        <translation type="unfinished">卡片</translation>
+        <translation>卡片</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1385" />
         <source>Read card &amp;&amp; preview</source>
-        <translation type="unfinished">讀取卡片並預覽</translation>
+        <translation>讀取卡片並預覽</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1386" />
         <source>Write selected</source>
-        <translation type="unfinished">寫入所選</translation>
+        <translation>寫入所選</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1387" />
-        <source>Stop after current block</source>
-        <translation type="unfinished">目前區塊完成後停止</translation>
+        <source>Retry failed only</source>
+        <translation>只重試失敗項目</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1388" />
+        <source>Stop after current block</source>
+        <translation>目前區塊完成後停止</translation>
+    </message>
+    <message>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1389" />
         <source>Close</source>
-        <translation type="unfinished">關閉</translation>
+        <translation>關閉</translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1426" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1428" />
         <source>not checked</source>
-        <translation type="unfinished">未檢查</translation>
+        <translation>未檢查</translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1459" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1468" />
         <source>no verified key</source>
-        <translation type="unfinished">沒有已驗證金鑰</translation>
+        <translation>沒有已驗證金鑰</translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1467" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1476" />
         <source>unreadable</source>
-        <translation type="unfinished">無法讀取</translation>
+        <translation>無法讀取</translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1475" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1484" />
         <source>same</source>
-        <translation type="unfinished">相同</translation>
+        <translation>相同</translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1480" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1489" />
         <source>partially unknown</source>
-        <translation type="unfinished">部分未知</translation>
+        <translation>部分未知</translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1485" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1494" />
         <source>different</source>
-        <translation type="unfinished">不同</translation>
+        <translation>不同</translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1498" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1507" />
         <source>No block is selected.</source>
-        <translation type="unfinished">沒有選取任何區塊。</translation>
+        <translation>沒有選取任何區塊。</translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1502" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1511" />
         <source>Write %1 block(s) to the card? This cannot be undone.</source>
-        <translation type="unfinished">要寫入 %1 個區塊到卡片嗎？此操作無法復原。</translation>
+        <translation>要寫入 %1 個區塊到卡片嗎？此操作無法復原。</translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1520" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1529" />
         <source>writing...</source>
-        <translation type="unfinished">寫入中…</translation>
+        <translation>寫入中…</translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1542" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1551" />
         <source>Write plan: %1 block(s) verified, %2 failed</source>
-        <translation type="unfinished">寫入計畫：%1 個區塊已驗證，%2 個失敗</translation>
+        <translation>寫入計畫：%1 個區塊已驗證，%2 個失敗</translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1563" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1572" />
         <source>Save MIFARE Classic keys</source>
-        <translation type="unfinished">儲存 MIFARE Classic 金鑰</translation>
+        <translation>儲存 MIFARE Classic 金鑰</translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1564" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1573" />
         <source>RRG client key.bin (*.bin);;Legacy GUI key.bin (*.bin);;Text key list (*.txt);;JSON (*.json)</source>
-        <translation type="unfinished">RRG client key.bin (*.bin);;舊版 GUI key.bin (*.bin);;文字金鑰清單 (*.txt);;JSON (*.json)</translation>
+        <translation>RRG client key.bin (*.bin);;舊版 GUI key.bin (*.bin);;文字金鑰清單 (*.txt);;JSON (*.json)</translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1585" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1594" />
         <source>Saved keys to %1 (%2 layout)</source>
-        <translation type="unfinished">金鑰已儲存到 %1（%2 排列）</translation>
+        <translation>金鑰已儲存到 %1（%2 排列）</translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1586" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1595" />
         <source>Keys saved</source>
-        <translation type="unfinished">金鑰已儲存</translation>
+        <translation>金鑰已儲存</translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1628" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1637" />
         <source>Load MIFARE Classic keys</source>
-        <translation type="unfinished">載入 MIFARE Classic 金鑰</translation>
+        <translation>載入 MIFARE Classic 金鑰</translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1629" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1638" />
         <source>Key files (*.bin *.txt *.json);;All files (*)</source>
-        <translation type="unfinished">金鑰檔 (*.bin *.txt *.json);;所有檔案 (*)</translation>
-    </message>
-    <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1635" />
-        <location filename="../src/ui/mfcworkbench.cpp" line="1661" />
-        <source>Loaded keys from %1</source>
-        <translation type="unfinished">已從 %1 載入金鑰</translation>
+        <translation>金鑰檔 (*.bin *.txt *.json);;所有檔案 (*)</translation>
     </message>
     <message>
         <location filename="../src/ui/mfcworkbench.cpp" line="1644" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1670" />
+        <source>Loaded keys from %1</source>
+        <translation>已從 %1 載入金鑰</translation>
+    </message>
+    <message>
+        <location filename="../src/ui/mfcworkbench.cpp" line="1653" />
         <source>Key file layout</source>
-        <translation type="unfinished">金鑰檔排列</translation>
+        <translation>金鑰檔排列</translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1645" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1654" />
         <source>This binary key file has two possible layouts. Which one is it?</source>
-        <translation type="unfinished">這個二進位金鑰檔有兩種可能排列，請選擇正確的一種。</translation>
+        <translation>這個二進位金鑰檔有兩種可能排列，請選擇正確的一種。</translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1646" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1655" />
         <source>RRG/official client: all key A first, then all key B.
 Legacy GUI: A0 B0 A1 B1 ...</source>
-        <translation type="unfinished">RRG／官方 client：先全部 Key A，再全部 Key B。
+        <translation>RRG／官方 client：先全部 Key A，再全部 Key B。
 舊版 GUI：A0 B0 A1 B1 …</translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1648" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1657" />
         <source>RRG key.bin</source>
-        <translation type="unfinished">RRG key.bin</translation>
+        <translation>RRG key.bin</translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1649" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1658" />
         <source>Legacy GUI</source>
-        <translation type="unfinished">舊版 GUI</translation>
+        <translation>舊版 GUI</translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1683" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1692" />
         <source>Card information failed: the client is not available</source>
-        <translation type="unfinished">讀取卡片資訊失敗：client 無法使用</translation>
+        <translation>讀取卡片資訊失敗：client 無法使用</translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1710" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1719" />
         <source>Card type</source>
-        <translation type="unfinished">卡型</translation>
+        <translation>卡型</translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1711" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1720" />
         <source>The card is %1 but the document is %2. Change it?</source>
-        <translation type="unfinished">卡片是 %1，但目前文件是 %2。要變更嗎？</translation>
+        <translation>卡片是 %1，但目前文件是 %2。要變更嗎？</translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1731" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1740" />
         <source>Card identified</source>
-        <translation type="unfinished">卡片辨識完成</translation>
+        <translation>卡片辨識完成</translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1775" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1784" />
         <source>Load dump A</source>
-        <translation type="unfinished">載入 dump A</translation>
+        <translation>載入 dump A</translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1776" />
-        <location filename="../src/ui/mfcworkbench.cpp" line="1787" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1785" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1796" />
         <source>Dumps (*.bin *.dump *.eml *.json *.txt);;All files (*)</source>
-        <translation type="unfinished">Dump 檔 (*.bin *.dump *.eml *.json *.txt);;所有檔案 (*)</translation>
+        <translation>Dump 檔 (*.bin *.dump *.eml *.json *.txt);;所有檔案 (*)</translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1786" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1795" />
         <source>Load dump B</source>
-        <translation type="unfinished">載入 dump B</translation>
+        <translation>載入 dump B</translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1799" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1808" />
         <source>Load both dump A and dump B first</source>
-        <translation type="unfinished">請先載入 dump A 與 dump B</translation>
+        <translation>請先載入 dump A 與 dump B</translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1812" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1821" />
         <source>Load and compare two dumps first</source>
-        <translation type="unfinished">請先載入並比較兩份 dump</translation>
+        <translation>請先載入並比較兩份 dump</translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1815" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1824" />
         <source>Export comparison report</source>
-        <translation type="unfinished">匯出比較報告</translation>
+        <translation>匯出比較報告</translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1817" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1826" />
         <source>Markdown (*.md);;CSV (*.csv);;Text (*.txt)</source>
-        <translation type="unfinished">Markdown (*.md);;CSV (*.csv);;文字 (*.txt)</translation>
+        <translation>Markdown (*.md);;CSV (*.csv);;文字 (*.txt)</translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1849" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1858" />
         <source>Failed to write %1</source>
-        <translation type="unfinished">寫入 %1 失敗</translation>
+        <translation>寫入 %1 失敗</translation>
     </message>
     <message>
-        <location filename="../src/ui/mfcworkbench.cpp" line="1852" />
+        <location filename="../src/ui/mfcworkbench.cpp" line="1861" />
         <source>Report saved to %1</source>
-        <translation type="unfinished">報告已儲存到 %1</translation>
+        <translation>報告已儲存到 %1</translation>
     </message>
 </context>
 <context>
@@ -2543,27 +2549,27 @@ Continue to write?</source>
     <message>
         <location filename="../src/common/pm3process.cpp" line="84" />
         <source>The client process did not start: %1</source>
-        <translation type="unfinished">客戶端程序無法啟動：%1</translation>
+        <translation>客戶端程序無法啟動：%1</translation>
     </message>
     <message>
         <location filename="../src/common/pm3process.cpp" line="107" />
         <source>Connection cancelled</source>
-        <translation type="unfinished">連線已取消</translation>
+        <translation>連線已取消</translation>
     </message>
     <message>
         <location filename="../src/common/pm3process.cpp" line="125" />
         <source>The client exited during the handshake</source>
-        <translation type="unfinished">客戶端在握手期間結束</translation>
+        <translation>客戶端在握手期間結束</translation>
     </message>
     <message>
         <location filename="../src/common/pm3process.cpp" line="130" />
         <source>Timed out waiting for the client version</source>
-        <translation type="unfinished">等待客戶端版本逾時</translation>
+        <translation>等待客戶端版本逾時</translation>
     </message>
     <message>
         <location filename="../src/common/pm3process.cpp" line="199" />
         <source>The client reported no firmware version (offline?)</source>
-        <translation type="unfinished">客戶端未回報韌體版本（離線？）</translation>
+        <translation>客戶端未回報韌體版本（離線？）</translation>
     </message>
 </context>
 <context>

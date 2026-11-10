@@ -294,13 +294,13 @@ QVector<Advice> advise(const Mfc::Document& document, NonceType nonce)
     const bool staticNonce = nonce == NonceType::Static || nonce == NonceType::SuperStatic;
 
     auto add = [&list](Method method, bool applicable, bool unverified,
-                       const QString& reason, const QStringList& requires = QStringList()) {
+                       const QString& reason, const QStringList& requirements = QStringList()) {
         Advice advice;
         advice.method = method;
         advice.applicable = applicable;
         advice.preconditionUnverified = unverified;
         advice.reason = reason;
-        advice.requires = requires;
+        advice.requirements = requirements;
         list.append(advice);
     };
 

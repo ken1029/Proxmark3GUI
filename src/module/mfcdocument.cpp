@@ -564,6 +564,81 @@ static bool parseKeyArray(const QJsonArray& array, int sectorCount, QVector<KeyE
     return true;
 }
 
+static IoResult officialMfcFromJson(const QJsonObject& root, Document* out)
+{
+    IoResult result;
+    QString fileType = root.value("FileType").toString().trimmed();
+    if(!fileType.startsWith("mfc", Qt::CaseInsensitive))
+    {
+        result.error = QStringLiteral("not an official MIFARE Classic dump (FileType=%1)").arg(fileType);
+        return result;
+    }
+
+    const QJsonObject blocks = root.value("blocks").toObject();
+    int maxBlock = -1;
+    for(auto it = blocks.constBegin(); it != blocks.constEnd(); ++it)
+    {
+        bool ok = false;
+        const int index = it.key().toInt(&ok);
+        if(ok)
+            maxBlock = qMax(maxBlock, index);
+    }
+    if(maxBlock < 0)
+    {
+        result.error = QStringLiteral("official dump has no blocks");
+        return result;
+    }
+
+    CardType type = CardType::M1K;
+    if(maxBlock >= 128)
+        type = CardType::M4K;
+    else if(maxBlock >= 64)
+        type = CardType::M2K;
+    else if(maxBlock >= 20)
+        type = CardType::M1K;
+    else
+        type = CardType::Mini;
+    Document doc(type);
+
+    const QJsonObject card = root.value("Card").toObject();
+    doc.uid = Document::normalizeHex(card.value("UID").toString());
+    for(int i = 0; i <= maxBlock && i < doc.blockCount(); i++)
+    {
+        const QString hex = Document::normalizeHex(blocks.value(QString::number(i)).toString());
+        if(hex.isEmpty())
+            continue;
+        if(!Document::isBlockText(hex))
+        {
+            result.error = QStringLiteral("official dump block %1 is not 32 hex symbols").arg(i);
+            return result;
+        }
+        doc.setBlock(i, hex, BlockState::Read);
+    }
+
+    const QJsonObject sectorKeys = root.value("SectorKeys").toObject();
+    for(auto it = sectorKeys.constBegin(); it != sectorKeys.constEnd(); ++it)
+    {
+        bool ok = false;
+        const int sector = it.key().toInt(&ok);
+        if(!ok || sector < 0 || sector >= doc.sectorCount())
+            continue;
+        const QJsonObject keys = it.value().toObject();
+        const QString keyA = Document::normalizeKey(keys.value("KeyA").toString());
+        const QString keyB = Document::normalizeKey(keys.value("KeyB").toString());
+        if(Document::isKeyText(keyA))
+            doc.setKey(sector, 'A', keyA, KeyState::Pending, KeySource::Imported);
+        if(Document::isKeyText(keyB))
+            doc.setKey(sector, 'B', keyB, KeyState::Pending, KeySource::Imported);
+    }
+
+    if(doc.uid.isEmpty() && doc.blockComplete(0))
+        doc.uid = doc.blockHex(0).left(8);
+    *out = doc;
+    result.ok = true;
+    result.detected = type;
+    return result;
+}
+
 static IoResult documentFromJson(const QByteArray& data, Document* out)
 {
     IoResult result;
@@ -576,6 +651,8 @@ static IoResult documentFromJson(const QByteArray& data, Document* out)
         return result;
     }
     const QJsonObject root = json.object();
+    if(root.contains("FileType") && root.value("FileType").toString().startsWith("mfc", Qt::CaseInsensitive))
+        return officialMfcFromJson(root, out);
     const QString format = root.value("format").toString();
     if(format != QStringLiteral("mfc-document") && format != QStringLiteral("mfc-keys"))
     {

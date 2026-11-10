@@ -62,7 +62,7 @@ struct Advice
     bool applicable = false;
     bool preconditionUnverified = false;
     QString reason;
-    QStringList requires;
+    QStringList requirements;
 };
 
 // Explain what is known, what is missing and which method is suggested.
