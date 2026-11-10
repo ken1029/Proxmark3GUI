@@ -3,11 +3,15 @@
 
 #include <QJsonDocument>
 #include <QDirIterator>
+#include <QCoreApplication>
+#include <QElapsedTimer>
+#include <QSaveFile>
 
 MainWindow::MainWindow(QWidget *parent):
     QMainWindow(parent)
     , ui(new Ui::MainWindow)
 {
+    clientQtPlot = true;
     ui->setupUi(this);
     dockAllWindows = new QAction(tr("Dock all windows"), this);
     myInfo = new QAction("wh201906", this);
@@ -33,7 +37,6 @@ MainWindow::MainWindow(QWidget *parent):
     pm3Thread = new QThread(this);
     connect(QApplication::instance(), &QApplication::aboutToQuit, pm3Thread, &QThread::quit);
     pm3 = new PM3Process(pm3Thread);
-    connect(pm3Thread, &QThread::finished, pm3, &PM3Process::deleteLater);
     pm3Thread->start();
     pm3state = false;
     clientWorkingDir = new QDir;
@@ -71,12 +74,23 @@ MainWindow::MainWindow(QWidget *parent):
 
 MainWindow::~MainWindow()
 {
+    // Stop the client before the widgets it reports to are destroyed.
+    // The QProcess lives in pm3Thread: it has to be killed from that thread.
+    // Touching it here (or letting its destructor run here) deadlocks on Windows
+    // and left Proxmark3GUI.exe alive holding the install directory.
+    if(pm3 != nullptr)
+    {
+        pm3->disconnect(); // no stale signal may reach the dying window
+        pm3->requestStop(); // breaks a connect that is still waiting for the prompt
+        QMetaObject::invokeMethod(pm3, "killPM3", Qt::BlockingQueuedConnection);
+    }
+    pm3Thread->quit();
+    if(!pm3Thread->wait(3000))
+        qWarning() << "pm3 thread did not stop";
+    // Both objects are thread-affine and the application is going away; let the OS
+    // reclaim them instead of destroying them from the wrong thread.
+    pm3Thread->setParent(nullptr);
     delete ui;
-    emit killPM3();
-    pm3Thread->exit(0);
-    pm3Thread->wait(5000);
-    delete pm3;
-    delete pm3Thread;
 }
 
 void MainWindow::loadConfig()
@@ -260,12 +274,21 @@ void MainWindow::on_PM3_connectButton_clicked()
     qDebug() << clientWorkingDir->absolutePath();
     emit setWorkingDir(clientWorkingDir->absolutePath());
 
+    capabilities = Pm3Capabilities::load(clientPath, clientWorkingDir->absolutePath());
+    if(capabilities.isLoaded())
+        qDebug() << "capability manifest:" << capabilities.manifestPath();
+    else
+        qDebug() << "capability manifest not found, all GUI features stay enabled";
+    applyCapabilities();
+
     loadConfig();
+    // Port enumeration (2 s timer) and the isBusy() watchdog run while the client is
+    // still starting up; on Windows both block the GUI/PM3 thread and make the
+    // connect look slow. Scan stops now, the watchdog starts once we are connected.
+    pendingPort = port;
+    portSearchTimer->stop();
+    setStatusBar(connectStatusBar, tr("Connecting..."));
     emit connectPM3(clientPath, args);
-    if(port != "" && !keepClientActive)
-        emit setSerialListener(port, true);
-    else if(!keepClientActive)
-        emit setSerialListener(false);
 
     envSetProcess.kill();
 }
@@ -289,11 +312,14 @@ void MainWindow::onPM3StateChanged(bool st, const QString& info)
     if(st == true)
     {
         portSearchTimer->stop();
+        if(!keepClientActive)
+            emit setSerialListener(pendingPort, !pendingPort.isEmpty());
         setStatusBar(PM3VersionBar, info);
         setStatusBar(connectStatusBar, tr("Connected"));
     }
     else
     {
+        emit setSerialListener(false);
         portSearchTimer->start();
         setStatusBar(PM3VersionBar, "");
         setStatusBar(connectStatusBar, tr("Not Connected"));
@@ -969,18 +995,21 @@ void MainWindow::on_MF_Sniff_loadButton_clicked() // use a tmp file to support c
         clientTracePath = *clientWorkingDir;
     else
         clientTracePath = QDir(userTraceSavePath); // For v4.16717 and later
+    clientTracePath.mkpath(".");
 
     title = tr("Plz select the trace file:");
     filename = QFileDialog::getOpenFileName(this, title, clientTracePath.absolutePath(), tr("Trace Files") + "(*" + defaultExtension + ")" + ";;" + tr("All Files(*.*)"));
     qDebug() << filename;
     if(filename != "")
     {
-        QString tmpFile = "tmp" + QString::number(QDateTime::currentDateTimeUtc().toTime_t()) + defaultExtension;
-        if(QFile::copy(filename, clientTracePath.absolutePath() + "/" + tmpFile))
+        QString tmpFile = QString("tmp-gui-%1-%2%3").arg(QCoreApplication::applicationPid())
+                              .arg(QDateTime::currentMSecsSinceEpoch()).arg(defaultExtension);
+        QString tmpPath = clientTracePath.absoluteFilePath(tmpFile);
+        QFile::remove(tmpPath);
+        if(QFile::copy(filename, tmpPath))
         {
             mifare->loadSniff(tmpFile);
-            util->delay(3000);
-            QFile::remove(clientTracePath.absolutePath() + "/" + tmpFile);
+            QFile::remove(tmpPath);
         }
         else
         {
@@ -1006,30 +1035,76 @@ void MainWindow::on_MF_Sniff_saveButton_clicked()
         clientTracePath = *clientWorkingDir;
     else
         clientTracePath = QDir(userTraceSavePath); // For v4.16717 and later
+    clientTracePath.mkpath(".");
+
+    // v4.23346 `trace save` downloads the device trace by default; `--buffer`
+    // saves the client side buffer instead. They are different contents, so ask.
+    Mifare::TraceSource source = mifare->getTraceSource();
+    QMessageBox sourceBox(this);
+    sourceBox.setWindowTitle(tr("Save trace"));
+    sourceBox.setText(tr("Where should the trace be saved from?"));
+    sourceBox.setInformativeText(tr("Device trace: downloads the trace currently stored in the Proxmark (trace save -f).\n"
+                                    "Client buffer: saves the trace loaded or listed in the client (trace save --buffer -f)."));
+    QPushButton* deviceButton = sourceBox.addButton(tr("Device trace"), QMessageBox::AcceptRole);
+    QPushButton* bufferButton = sourceBox.addButton(tr("Client buffer"), QMessageBox::AcceptRole);
+    sourceBox.addButton(QMessageBox::Cancel);
+    sourceBox.setDefaultButton(source == Mifare::TRACE_SOURCE_DEVICE ? deviceButton : bufferButton);
+    sourceBox.exec();
+    if(sourceBox.clickedButton() == deviceButton)
+        source = Mifare::TRACE_SOURCE_DEVICE;
+    else if(sourceBox.clickedButton() == bufferButton)
+        source = Mifare::TRACE_SOURCE_BUFFER;
+    else
+        return;
 
     title = tr("Plz select the location to save trace file:");
     filename = QFileDialog::getSaveFileName(this, title, clientTracePath.absolutePath(), tr("Trace Files") + "(*" + defaultExtension + ")");
     qDebug() << filename;
-    if(filename != "")
+    if(filename.isEmpty())
+        return;
+
+    QString tmpFile = QString("tmp-gui-%1-%2%3").arg(QCoreApplication::applicationPid())
+                          .arg(QDateTime::currentMSecsSinceEpoch()).arg(defaultExtension);
+    QString tmpPath = clientTracePath.absoluteFilePath(tmpFile);
+    QFile::remove(tmpPath);
+
+    bool saved = mifare->saveSniff(tmpFile, source);
+
+    // wait until the client has finished writing (size stable, non-empty)
+    QFileInfo tmpInfo(tmpPath);
+    qint64 lastSize = -1;
+    QElapsedTimer waitTimer;
+    waitTimer.start();
+    while(saved && waitTimer.elapsed() < 5000)
     {
-        QString tmpFile = "tmp" + QString::number(QDateTime::currentDateTimeUtc().toTime_t()) + defaultExtension;
-        mifare->saveSniff(tmpFile);
-        for(int i = 0; i < 100; i++)
+        tmpInfo.refresh();
+        if(tmpInfo.exists() && tmpInfo.size() > 0 && tmpInfo.size() == lastSize)
+            break;
+        lastSize = tmpInfo.size();
+        util->delay(100);
+    }
+    tmpInfo.refresh();
+    saved = saved && tmpInfo.exists() && tmpInfo.size() > 0;
+
+    if(saved)
+    {
+        QFile srcFile(tmpPath);
+        if(srcFile.open(QFile::ReadOnly))
         {
-            util->delay(100);
-            if(QFile::exists(clientTracePath.absolutePath() + "/" + tmpFile))
-                break;
+            // QSaveFile commits atomically, the previous file survives a failure
+            QSaveFile dstFile(filename);
+            if(!dstFile.open(QFile::WriteOnly) || dstFile.write(srcFile.readAll()) < 0 || !dstFile.commit())
+                saved = false;
         }
-        // filename is not empty -> the user has chosen to overwrite the existing file
-        if(QFile::exists(filename))
-            QFile::remove(filename);
-        if(!QFile::copy(clientTracePath.absolutePath() + "/" + tmpFile, filename))
+        else
         {
-            QMessageBox::information(this, tr("Info"), tr("Failed to save to") + "\n" + filename);
+            saved = false;
         }
-        QFile::remove(clientTracePath.absolutePath() + "/" + tmpFile);
     }
 
+    QFile::remove(tmpPath);
+    if(!saved)
+        QMessageBox::information(this, tr("Info"), tr("Failed to save to") + "\n" + filename);
 }
 
 void MainWindow::on_MF_Sniff_sniffButton_clicked()
@@ -1281,6 +1356,7 @@ void MainWindow::signalInit()
     connect(pm3, &PM3Process::PM3StatedChanged, util, &Util::setRunningState);
     connect(pm3, &PM3Process::errorOccurred, this, &MainWindow::onPM3ErrorOccurred);
     connect(pm3, &PM3Process::HWConnectFailed, this, &MainWindow::onPM3HWConnectFailed);
+    connect(pm3, &PM3Process::PM3VersionInfo, this, &MainWindow::onPM3VersionInfo);
     connect(this, &MainWindow::killPM3, pm3, &PM3Process::killPM3);
     connect(this, &MainWindow::setProcEnv, pm3, &PM3Process::setProcEnv);
     connect(this, &MainWindow::setWorkingDir, pm3, &PM3Process::setWorkingDir);
@@ -1375,15 +1451,115 @@ void MainWindow::setState(bool st)
 
 void MainWindow::setButtonsEnabled(bool st)
 {
-    ui->MF_attackGroupBox->setEnabled(st);
-    ui->MF_normalGroupBox->setEnabled(st);
-    ui->MF_UIDGroupBox->setEnabled(st);
-    ui->MF_simGroupBox->setEnabled(st);
-    ui->MF_sniffGroupBox->setEnabled(st);
+    const bool mf = capabilities.has("iso14443a");
+    const bool lf = capabilities.has("lf");
+    ui->MF_attackGroupBox->setEnabled(st && mf);
+    ui->MF_normalGroupBox->setEnabled(st && mf);
+    ui->MF_UIDGroupBox->setEnabled(st && mf);
+    ui->MF_simGroupBox->setEnabled(st && mf);
+    ui->MF_sniffGroupBox->setEnabled(st && mf);
     ui->Raw_CMDEdit->setEnabled(st);
     ui->Raw_sendCMDButton->setEnabled(st);
-    ui->LF_LFconfigGroupBox->setEnabled(st);
-    ui->LF_operationGroupBox->setEnabled(st);
+    ui->LF_LFconfigGroupBox->setEnabled(st && lf);
+    ui->LF_operationGroupBox->setEnabled(st && lf);
+}
+
+void MainWindow::applyCapabilities()
+{
+    const bool mf = capabilities.has("iso14443a");
+    const bool lf = capabilities.has("lf");
+    const bool hfSniff = capabilities.has("hfsniff") && mf;
+    const bool plot = clientQtPlot && lf;
+
+    const int mfTab = ui->funcTab->indexOf(ui->mifareTab);
+    const int lfTab = ui->funcTab->indexOf(ui->lfTab);
+    const int t55xxTab = ui->funcTab->indexOf(ui->t55xxTab);
+    if(mfTab >= 0)
+        ui->funcTab->setTabEnabled(mfTab, mf);
+    if(lfTab >= 0)
+        ui->funcTab->setTabEnabled(lfTab, lf);
+    if(t55xxTab >= 0)
+        ui->funcTab->setTabEnabled(t55xxTab, lf);
+
+    const QString mfReason = capabilities.reason("ISO14443A");
+    const QString lfReason = capabilities.reason("LF");
+    const QString sniffReason = capabilities.has("hfsniff") ? mfReason : capabilities.reason("HFSNIFF");
+
+    QList<QWidget*> mfWidgets = {ui->MF_attackGroupBox, ui->MF_normalGroupBox, ui->MF_UIDGroupBox,
+                                 ui->MF_simGroupBox, ui->MF_sniffGroupBox, ui->mifareTab
+                                };
+    for(QWidget* widget : mfWidgets)
+        widget->setToolTip(mf ? QString() : mfReason);
+
+    QList<QWidget*> lfWidgets = {ui->LF_LFconfigGroupBox, ui->LF_operationGroupBox, ui->lfTab, ui->t55xxTab};
+    for(QWidget* widget : lfWidgets)
+        widget->setToolTip(lf ? QString() : lfReason);
+
+    ui->MF_Sniff_sniffButton->setEnabled(hfSniff);
+    ui->MF_14aSniff_snoopButton->setEnabled(hfSniff);
+    ui->MF_Sniff_sniffButton->setToolTip(hfSniff ? QString() : sniffReason);
+    ui->MF_14aSniff_snoopButton->setToolTip(hfSniff ? QString() : sniffReason);
+
+    ui->LF_Op_readButton->setEnabled(plot);
+    ui->LF_Op_sniffButton->setEnabled(plot);
+    if(!plot)
+    {
+        const QString reason = lf ? tr("This client was built without QT plot support") : lfReason;
+        ui->LF_Op_readButton->setToolTip(reason);
+        ui->LF_Op_sniffButton->setToolTip(reason);
+    }
+
+    setButtonsEnabled(pm3state || keepButtonsEnabled);
+
+    if(capabilities.isLoaded() && !capabilities.removedFeatures().isEmpty())
+    {
+        statusBar()->showMessage(tr("Firmware capabilities: removed %1")
+                                 .arg(capabilities.removedFeatures().join(", ")), 15000);
+    }
+}
+
+void MainWindow::onPM3VersionInfo(const QString& clientVersion, const QString& firmwareVersion,
+                                  const QString& target, bool mismatch, bool clientQtPlot)
+{
+    this->clientQtPlot = clientQtPlot;
+    applyCapabilities();
+
+    QStringList info;
+    if(!clientVersion.isEmpty())
+        info << tr("client %1").arg(clientVersion);
+    if(!firmwareVersion.isEmpty())
+        info << tr("firmware %1").arg(firmwareVersion);
+    if(!target.isEmpty())
+        info << tr("target %1").arg(target);
+    if(pm3 != nullptr && pm3->lastConnectMs > 0)
+        info << tr("ready in %1 s").arg(pm3->lastConnectMs / 1000.0, 0, 'f', 1);
+    if(!info.isEmpty())
+        statusBar()->showMessage(info.join(" | "), 15000);
+
+    if(mismatch)
+    {
+        statusBar()->showMessage(tr("Client and firmware versions differ: %1 / %2")
+                                 .arg(clientVersion, firmwareVersion), 30000);
+        qDebug() << "client/firmware version mismatch" << clientVersion << firmwareVersion;
+    }
+
+    if(capabilities.isLoaded() && !firmwareVersion.isEmpty())
+    {
+        QString manifestVersion = capabilities.firmwareVersion();
+        int dash = manifestVersion.indexOf('-');
+        if(dash > 0)
+            manifestVersion = manifestVersion.left(dash);
+        QString reportedVersion = firmwareVersion;
+        dash = reportedVersion.indexOf('-');
+        if(dash > 0)
+            reportedVersion = reportedVersion.left(dash);
+        if(!manifestVersion.isEmpty() && manifestVersion != reportedVersion)
+        {
+            statusBar()->showMessage(tr("Capability manifest %1 does not match firmware %2")
+                                     .arg(capabilities.firmwareVersion(), firmwareVersion), 30000);
+            qDebug() << "capability manifest/firmware mismatch" << capabilities.firmwareVersion() << firmwareVersion;
+        }
+    }
 }
 
 void MainWindow::on_GroupBox_clicked(bool checked)

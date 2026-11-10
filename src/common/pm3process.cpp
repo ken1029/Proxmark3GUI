@@ -1,4 +1,7 @@
 ﻿#include "pm3process.h"
+#include <QElapsedTimer>
+#include <functional>
+#include <QRegularExpression>
 
 PM3Process::PM3Process(QThread* thread, QObject* parent): QProcess(parent)
 {
@@ -17,62 +20,115 @@ PM3Process::PM3Process(QThread* thread, QObject* parent): QProcess(parent)
     qRegisterMetaType<QProcess::ProcessError>("QProcess::ProcessError");
 }
 
+static QString baseVersion(const QString& version)
+{
+    QString result = version.trimmed();
+    int dash = result.indexOf('-');
+    if(dash > 0)
+        result = result.left(dash);
+    return result;
+}
+
+void PM3Process::requestStop()
+{
+    stopRequested.store(true);
+}
+
 void PM3Process::connectPM3(const QString& path, const QStringList args)
 {
+    stopRequested.store(false);
     QString result;
-    Util::ClientType clientType;
-    setRequiringOutput(true);
-	QRegularExpression osPattern("(os:\\s+|OS\\.+\\s+)");
+    Util::ClientType clientType = Util::CLIENTTYPE_OFFICIAL;
 
     // stash for reconnect
     currPath = path;
     currArgs = args;
 
+    clientVersion.clear();
+    firmwareVersion.clear();
+    targetName.clear();
+
     // using "-f" option to make the client output flushed after every print.
     // single '\r' might appear. Don't use QProcess::Text there or '\r' is ignored.
+    setRequiringOutput(true);
     start(path, args, QProcess::Unbuffered | QProcess::ReadWrite);
-    if(waitForStarted(10000))
+    if(!waitForStarted(10000))
     {
-        waitForReadyRead(10000);
         setRequiringOutput(false);
-        result = *requiredOutput;
-        if(result.contains("[=]"))
+        return;
+    }
+
+    // Wait for the client prompt (or the hardware version block) instead of
+    // assuming the first read already contains everything.
+    // 50 ms slices: a 200 ms slice per read is the granularity the user sees as
+    // "the connect takes ages" once the client has already printed the prompt.
+    QElapsedTimer startupTimer;
+    startupTimer.start();
+    auto waitForOutput = [this](const std::function<bool(const QString&)>& done, int timeoutMs) {
+        QElapsedTimer timer;
+        timer.start();
+        while(!done(*requiredOutput))
         {
-            clientType = Util::CLIENTTYPE_ICEMAN;
-            setRequiringOutput(true);
-            write("hw version\n");
-            for(int i = 0; i < 50; i++)
-            {
-                waitForReadyRead(200);
-                result += *requiredOutput;
-                // if(result.contains("os: "))
-                if(osPattern.match(result).hasMatch())
-                    break;
-            }
-            setRequiringOutput(false);
+            if(stopRequested.load() || state() == QProcess::NotRunning || timer.elapsed() >= timeoutMs)
+                return false;
+            waitForReadyRead(50);
         }
-        else
-        {
-            clientType = Util::CLIENTTYPE_OFFICIAL;
-        }
-        // if(result.contains("os: ")) // make sure the PM3 is connected
-		if(osPattern.match(result).hasMatch())
-        {
-            emit changeClientType(clientType);
-            // result = result.mid(result.indexOf("os: "));
-			QRegularExpressionMatch osMatch = osPattern.match(result);
-			result = result.mid(osMatch.capturedStart());
-            result = result.left(result.indexOf("\n"));
-            // result = result.mid(4, result.indexOf(" ", 4) - 4);
-			result = result.mid(osMatch.capturedLength(), result.indexOf(" ", osMatch.capturedLength()) - osMatch.capturedLength());
-            emit PM3StatedChanged(true, result);
-        }
-        else
-        {
-            qDebug() << "unexpected output:" << (result.isEmpty() ? "(empty)" : result);
-            emit HWConnectFailed();
-            kill();
-        }
+        return true;
+    };
+
+    waitForOutput([](const QString& out) { return out.contains("-->") && out.contains("\n"); }, 10000);
+    result = *requiredOutput;
+
+    // Ask for the version block. It works offline too (client version only).
+    const QString startupOutput = result;
+    requiredOutput->clear();
+    write("hw version\n");
+    waitForOutput([](const QString& out) { return Util::isPromptAtEnd(Util::stripAnsi(out)); }, 10000);
+    result = *requiredOutput;
+    setRequiringOutput(false);
+    lastConnectMs = startupTimer.elapsed();
+    qDebug() << "connect: client ready in" << lastConnectMs << "ms";
+    result = startupOutput + result;
+
+    const QString clean = Util::stripAnsi(result);
+    // Device present: "    Client.... v4.23346 ..."; offline: "Iceman/master/v4.23346-suspect ..."
+    QRegularExpression clientRe("(?:Iceman/[^/\\s]+/)?(v?\\d+(?:\\.\\d+)+(?:[-+][^\\s]*)?)");
+    QRegularExpression firmwareRe("OS\\.{2,}\\s*([^\\s]+)");
+    QRegularExpression targetRe("Target\\.{2,}\\s*([^\\r\\n]+)");
+    const int clientLabelPos = clean.indexOf("Client....");
+    const QString clientSection = (clientLabelPos >= 0) ? clean.mid(clientLabelPos) : clean;
+    QRegularExpressionMatch match = clientRe.match(clientSection);
+    if(match.hasMatch())
+        clientVersion = match.captured(1);
+    match = firmwareRe.match(clean);
+    if(match.hasMatch())
+        firmwareVersion = match.captured(1);
+    match = targetRe.match(clean);
+    if(match.hasMatch())
+        targetName = match.captured(1).trimmed();
+
+    // RRG/Iceman clients report v4.x; the official repo is still v3.x.
+    if(result.contains("[=]") || clientVersion.startsWith("v4.") || clientVersion.startsWith("4."))
+        clientType = Util::CLIENTTYPE_ICEMAN;
+    else
+        clientType = Util::CLIENTTYPE_OFFICIAL;
+
+    const bool mismatch = !clientVersion.isEmpty() && !firmwareVersion.isEmpty()
+                          && baseVersion(clientVersion) != baseVersion(firmwareVersion);
+    const bool clientQtPlot = clean.contains("QT GUI support............ present");
+
+    emit changeClientType(clientType);
+    emit PM3VersionInfo(clientVersion, firmwareVersion, targetName, mismatch, clientQtPlot);
+
+    if(!firmwareVersion.isEmpty())
+    {
+        emit PM3StatedChanged(true, firmwareVersion);
+    }
+    else
+    {
+        qDebug() << "unexpected output:" << (clean.isEmpty() ? "(empty)" : clean);
+        emit HWConnectFailed();
+        kill();
     }
 
     setRequiringOutput(false);
@@ -172,6 +228,7 @@ void PM3Process::setWorkingDir(const QString& dir)
 void PM3Process::killPM3()
 {
     kill();
+    waitForFinished(2000);
     emit PM3StatedChanged(false);
     setSerialListener(false);
 }

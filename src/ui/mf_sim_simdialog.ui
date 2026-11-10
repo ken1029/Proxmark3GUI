@@ -418,7 +418,7 @@
          </sizepolicy>
         </property>
         <property name="text">
-         <string>set keys found from 'reader attack' to emulator memory (implies x(--crack) and i)</string>
+         <string>set keys found from 'reader attack' to emulator memory (implies -x and i)</string>
         </property>
         <property name="wordWrap">
          <bool>true</bool>

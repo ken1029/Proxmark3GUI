@@ -71,7 +71,7 @@
     </message>
     <message>
         <location filename="../src/ui/mf_sim_simdialog.ui" line="421"/>
-        <source>set keys found from &apos;reader attack&apos; to emulator memory (implies x(--crack) and i)</source>
+        <source>set keys found from &apos;reader attack&apos; to emulator memory (implies -x and i)</source>
         <translation type="unfinished"></translation>
     </message>
     <message>

@@ -56,6 +56,12 @@ public:
         TARGET_EMULATOR,
     };
 
+    enum TraceSource
+    {
+        TRACE_SOURCE_DEVICE, // trace currently stored on the Proxmark
+        TRACE_SOURCE_BUFFER, // client side buffer (trace load / trace list)
+    };
+
     static const CardType card_mini;
     static const CardType card_1k;
     static const CardType card_2k;
@@ -106,7 +112,8 @@ public:
     void wipeE();
     void simulate();
     void loadSniff(const QString& file);
-    void saveSniff(const QString& file);
+    bool saveSniff(const QString& file, TraceSource source = TRACE_SOURCE_DEVICE);
+    TraceSource getTraceSource() const;
     void data_fillKeys();
 
     static QList<quint8> data_getACBits(const QString& text);
@@ -125,6 +132,7 @@ private:
     Util* util;
 
     QVariantMap configMap;
+    TraceSource traceSource;
 
     QStringList* keyAList;
     QStringList* keyBList;

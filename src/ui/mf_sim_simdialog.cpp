@@ -24,7 +24,7 @@ MF_Sim_simDialog::MF_Sim_simDialog(int cardType, QString cardTypeText, QWidget *
         ui->uBox->setText("-u");
         ui->nBox->setText("-n");
         ui->iBox->setText("-i");
-        ui->xBox->setText("--crack");
+        ui->xBox->setText("-x");
         ui->eBox->setText("-e");
     }
     this->cardType = cardType;
@@ -95,7 +95,7 @@ void MF_Sim_simDialog::on_buttonBox_accepted()
         paras += (ui->sakBox->isChecked() ? "--sak " + ui->sakEdit->text() + " " : "");
         paras += (ui->nBox->isChecked() ? "-n " + ui->nEdit->text() + " " : "");
         paras += (ui->iBox->isChecked() ? "-i " : "");
-        paras += (ui->xBox->isChecked() ? "--crack " : "");
+        paras += (ui->xBox->isChecked() ? "-x " : "");
         paras += (ui->eBox->isChecked() ? "-e " : "");
         paras += (ui->vBox->isChecked() ? "-v " : "");
         emit sendCMD(QString("hf mf sim --") + cardTypeText + " " + paras.trimmed());

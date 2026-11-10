@@ -76,8 +76,8 @@
     </message>
     <message>
         <location filename="../src/ui/mf_sim_simdialog.ui" line="421"/>
-        <source>set keys found from &apos;reader attack&apos; to emulator memory (implies x(--crack) and i)</source>
-        <translation>在获得密码后自动将密码写入模拟器内存（自动勾选x(--crack)和i）</translation>
+        <source>set keys found from &apos;reader attack&apos; to emulator memory (implies -x and i)</source>
+        <translation>在获得密码后自动将密码写入模拟器内存（自动勾选-x和i）</translation>
     </message>
     <message>
         <location filename="../src/ui/mf_sim_simdialog.ui" line="590"/>

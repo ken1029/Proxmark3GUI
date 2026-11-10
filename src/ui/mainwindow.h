@@ -29,6 +29,7 @@
 
 #include "common/myeventfilter.h"
 #include "common/pm3process.h"
+#include "common/capabilities.h"
 #include "module/mifare.h"
 #include "module/lf.h"
 #include "module/t55xxtab.h"
@@ -62,6 +63,7 @@ public slots:
     void on_MF_keyWidget_resized(QObject *obj_addr, QEvent &event);
     void onPM3ErrorOccurred(QProcess::ProcessError error);
     void onPM3HWConnectFailed();
+    void onPM3VersionInfo(const QString& clientVersion, const QString& firmwareVersion, const QString& target, bool mismatch, bool clientQtPlot);
 private slots:
 
     void on_PM3_connectButton_clicked();
@@ -244,6 +246,7 @@ private:
 
     PM3Process* pm3;
     bool pm3state;
+    QString pendingPort;
     bool keepButtonsEnabled;
     bool keepClientActive;
     QThread* pm3Thread;
@@ -263,6 +266,8 @@ private:
     MF_trailerDecoderDialog* decDialog;
 
     QStringList m_clientPathList;
+    Pm3Capabilities capabilities;
+    bool clientQtPlot;
 
     void signalInit();
     void MF_widgetReset();
@@ -272,6 +277,7 @@ private:
     void saveClientPathList();
     void dockInit();
     void loadConfig();
+    void applyCapabilities();
 protected:
     void contextMenuEvent(QContextMenuEvent *event) override;
 signals:

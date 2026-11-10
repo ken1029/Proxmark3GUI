@@ -1,4 +1,5 @@
 ﻿#include "mifare.h"
+#include "common/pm3cmd.h"
 #include <QJsonArray>
 
 const Mifare::CardType Mifare::card_mini =
@@ -81,6 +82,7 @@ Mifare::Mifare(Ui::MainWindow *ui, Util *addr, QWidget *parent): QObject(parent)
     util = addr;
     this->ui = ui;
     cardType = card_1k;
+    traceSource = TRACE_SOURCE_DEVICE;
     keyAList = new QStringList();
     keyBList = new QStringList();
     dataList = new QStringList();
@@ -272,6 +274,7 @@ void Mifare::darkside()
 void Mifare::sniff()
 {
     QVariantMap config = configMap["sniff"].toMap();
+    traceSource = TRACE_SOURCE_DEVICE;
     util->execCMD(config["cmd"].toString());
 
     Util::gotoRawTab();
@@ -280,6 +283,7 @@ void Mifare::sniff()
 void Mifare::sniff14a()
 {
     QVariantMap config = configMap["sniff 14a"].toMap();
+    traceSource = TRACE_SOURCE_DEVICE;
     util->execCMD(config["cmd"].toString());
 
     Util::gotoRawTab();
@@ -288,6 +292,8 @@ void Mifare::sniff14a()
 void Mifare::list()
 {
     QVariantMap config = configMap["list"].toMap();
+    // trace list downloads the device trace into the client buffer
+    traceSource = TRACE_SOURCE_DEVICE;
     util->execCMD(config["cmd"].toString());
 
     Util::gotoRawTab();
@@ -579,65 +585,75 @@ void Mifare::readSelected(TargetType targetType)
 
 bool Mifare::_writeblk(int blockId, KeyType keyType, const QString& key, const QString& data, TargetType targetType, int waitTime)
 {
-    QString result;
     QString input = data.toUpper();
 
     input.remove(" ");
     if(data_isDataValid(input) != DATA_NOSPACE)
         return false;
 
+    QVariantMap config;
+    QString cmd;
     if(targetType == TARGET_MIFARE)
     {
         if(!data_isKeyValid(key))
             return false;
-        QVariantMap config = configMap["normal write block"].toMap();
-        QString cmd = config["cmd"].toString();
+        config = configMap["normal write block"].toMap();
+        cmd = config["cmd"].toString();
         cmd.replace("<block>", QString::number(blockId));
         cmd.replace("<key type>", config["key type"].toMap()[QString((char)keyType)].toString());
         cmd.replace("<key>", key);
         cmd.replace("<data>", input);
-        result = util->execCMDWithOutput(cmd, waitTime);
-        if(result.isEmpty())
-            return false;
-
-        QVariantList failedFlag = config["failed flag"].toJsonArray().toVariantList();
-        for(auto flag = failedFlag.begin(); flag != failedFlag.end(); flag++)
-        {
-            if(result.contains(flag->toString()))
-                return false;
-        }
-        return true;
     }
     else if(targetType == TARGET_UID)
     {
-        QVariantMap config = configMap["Magic Card write block"].toMap();
-        QString cmd = config["cmd"].toString();
+        config = configMap["Magic Card write block"].toMap();
+        cmd = config["cmd"].toString();
         cmd.replace("<block>", QString::number(blockId));
         cmd.replace("<data>", input);
-        result = util->execCMDWithOutput(cmd, waitTime);
-        if(result.isEmpty())
-            return false;
-
-        QVariantList failedFlag = config["failed flag"].toJsonArray().toVariantList();
-        for(auto flag = failedFlag.begin(); flag != failedFlag.end(); flag++)
-        {
-            if(result.contains(flag->toString()))
-                return false;
-        }
-        return true;
     }
     else if(targetType == TARGET_EMULATOR)
     {
-        QVariantMap config = configMap["emulator write block"].toMap();
-        QString cmd = config["cmd"].toString();
+        config = configMap["emulator write block"].toMap();
+        cmd = config["cmd"].toString();
         cmd.replace("<block>", QString::number(blockId));
         cmd.replace("<data>", input);
-        util->execCMD(cmd);
-        util->delay(5);
-        return true;
+    }
+    else
+    {
+        return false;
     }
 
-    return false;
+    Util::ReturnTrigger trigger = Pm3Cmd::makeWriteTrigger(config, waitTime);
+    Util::ExecResult result = util->execCMDWithResult(cmd, trigger);
+    if(!result.isOk())
+    {
+        qDebug() << "write block failed:" << blockId << Util::stripAnsi(result.output);
+        return false;
+    }
+
+    // A magic card or the emulator memory has no "Write ( ok )" marker.
+    // Verify the effect by reading the block back.
+    if(config["verify read back"].toBool())
+    {
+        for(int attempt = 0; attempt < 3; attempt++)
+        {
+            QString readBack = _readblk(blockId, KEY_A, "FFFFFFFFFFFF", targetType, 1000);
+            readBack = Pm3Cmd::normalizedHex(readBack);
+            if(readBack == input)
+                return true;
+            if(!readBack.isEmpty() && readBack.contains("?"))
+            {
+                // trailer block with a non-readable key: the read-back is masked, trust the command status
+                qDebug() << "write block" << blockId << "read back is masked, command completed";
+                return true;
+            }
+            util->delay(100);
+        }
+        qDebug() << "write block" << blockId << "read-back mismatch";
+        return false;
+    }
+
+    return true;
 }
 
 void Mifare::writeOne(TargetType targetType)
@@ -831,27 +847,51 @@ void Mifare::loadSniff(const QString& file)
     QVariantMap config = configMap["load sniff"].toMap();
     QString cmd = config["cmd"].toString();
     cmd.replace("<filename>", file);
-    if(config.contains("show cmd"))
+
+    Util::ReturnTrigger trigger(10000);
+    trigger.hardTimeout = 30000;
+    trigger.waitForPrompt = true;
+    trigger.expectedOutputs = QStringList({"Recorded Activity \\(TraceLen", "loaded"});
+    trigger.failedOutputs = QStringList({"Could not open file", "not available in this mode", "\\[-\\]"});
+    Util::ExecResult result = util->execCMDWithResult(cmd, trigger);
+    if(result.isOk())
     {
-        if(util->execCMDWithOutput(cmd, Util::ReturnTrigger({"loaded"})) != "")
+        traceSource = TRACE_SOURCE_BUFFER;
+        if(config.contains("show cmd"))
             util->execCMD(config["show cmd"].toString());
     }
     else
     {
-        util->execCMD(cmd);
+        qDebug() << "load trace failed:" << Util::stripAnsi(result.output);
     }
 
     Util::gotoRawTab();
 }
 
-void Mifare::saveSniff(const QString& file)
+bool Mifare::saveSniff(const QString& file, TraceSource source)
 {
     QVariantMap config = configMap["save sniff"].toMap();
-    QString cmd = config["cmd"].toString();
-    cmd.replace("<filename>", file);
-    util->execCMD(cmd);
+    QString cmd = Pm3Cmd::traceSaveCommand(config, source == TRACE_SOURCE_BUFFER, file);
+
+    Util::ReturnTrigger trigger(15000);
+    trigger.hardTimeout = 60000;
+    trigger.waitForPrompt = true;
+    trigger.expectedOutputs = QStringList({"Saved \\d+ bytes to binary file"});
+    trigger.failedOutputs = QStringList({"trace is empty", "Could not", "not available in this mode", "file not found or locked", "\\[-\\]"});
+    Util::ExecResult result = util->execCMDWithResult(cmd, trigger);
+    if(!result.isOk())
+    {
+        qDebug() << "save trace failed:" << Util::stripAnsi(result.output);
+        return false;
+    }
 
     Util::gotoRawTab();
+    return true;
+}
+
+Mifare::TraceSource Mifare::getTraceSource() const
+{
+    return traceSource;
 }
 
 void Mifare::data_syncWithDataWidget(bool syncAll, int block)

@@ -10,9 +10,11 @@ Ui::MainWindow* Util::ui = nullptr;
 Util::Util(QObject *parent) : QObject(parent)
 {
     isRequiringOutput = false;
+    isRunning = false;
     requiredOutput = new QString();
-    timeStamp = QTime::currentTime();
+    timeStamp.start();
     qRegisterMetaType<Util::ClientType>("Util::ClientType");
+    qRegisterMetaType<Util::ExecStatus>("Util::ExecStatus");
 }
 
 
@@ -22,7 +24,7 @@ void Util::processOutput(const QString& output)
     if(isRequiringOutput)
     {
         requiredOutput->append(output);
-        timeStamp = QTime::currentTime();
+        timeStamp.restart();
     }
     emit refreshOutput(output);
 }
@@ -34,63 +36,150 @@ void Util::execCMD(const QString& cmd)
         emit write(cmd + "\n");
 }
 
+QString Util::stripAnsi(const QString& text)
+{
+    // CSI sequences (colors, cursor movement) and OSC sequences
+    static const QRegularExpression csi("\\x1b\\[[0-9;?]*[ -/]*[@-~]");
+    static const QRegularExpression osc("\\x1b\\][^\\x07]*(?:\\x07|\\x1b\\\\)");
+    QString result = text;
+    result.remove(osc);
+    result.remove(csi);
+    return result;
+}
+
+bool Util::matchAnyPattern(const QString& text, const QStringList& patterns, QString* matched)
+{
+    for(const QString& pattern : patterns)
+    {
+        if(pattern.isEmpty())
+            continue;
+        QRegularExpression re(pattern, QRegularExpression::DotMatchesEverythingOption);
+        QRegularExpressionMatch match = re.match(text);
+        if(match.hasMatch())
+        {
+            if(matched != nullptr)
+                *matched = match.captured();
+            return true;
+        }
+    }
+    return false;
+}
+
+bool Util::isPromptAtEnd(const QString& text)
+{
+    // v4.23346 prompt: "[usb] pm3 --> ", "[offline] pm3 --> ", "[usb|script] pm3 --> "
+    static const QRegularExpression prompt("(?:^|[\\r\\n])[ \\t]*(?:\\[[^\\]\\r\\n]*\\][ \\t]*)?pm[35][ \\t]*-->[ \\t]*$");
+    return prompt.match(text).hasMatch();
+}
+
+Util::ExecResult Util::execCMDWithResult(const QString& cmd, const ReturnTrigger& trigger, bool rawOutput)
+{
+    Q_UNUSED(rawOutput)
+    ExecResult res;
+    if(!isRunning)
+    {
+        res.status = EXEC_NOT_RUNNING;
+        return res;
+    }
+
+    isRequiringOutput = true;
+    requiredOutput->clear();
+    timeStamp.start();
+    execCMD(cmd);
+
+    const qint64 idleLimit = qMax<qint64>((qint64)trigger.waitTime, 10);
+    const qint64 hardLimit = trigger.hardTimeout ? (qint64)trigger.hardTimeout : qMax<qint64>(idleLimit * 4, 5000);
+    QElapsedTimer hardTimer;
+    hardTimer.start();
+
+    int lastLen = -1;
+    bool successMatched = false;
+    bool failureMatched = false;
+    bool promptSeen = false;
+    bool clientExited = false;
+
+    while(true)
+    {
+        QApplication::processEvents(QEventLoop::AllEvents, 50);
+        if(requiredOutput->size() != lastLen)
+        {
+            lastLen = requiredOutput->size();
+            timeStamp.restart();
+        }
+
+        const QString clean = stripAnsi(*requiredOutput);
+
+        if(!failureMatched && matchAnyPattern(clean, trigger.failedOutputs))
+            failureMatched = true;
+        if(!successMatched && matchAnyPattern(clean, trigger.expectedOutputs))
+        {
+            successMatched = true;
+            if(!trigger.waitForPrompt)
+            {
+                delay(200);
+                break;
+            }
+        }
+        if(trigger.waitForPrompt && isPromptAtEnd(clean))
+        {
+            promptSeen = true;
+            break;
+        }
+        if(!isRunning)
+        {
+            clientExited = true;
+            break;
+        }
+        if(failureMatched)
+            break;
+        if(timeStamp.elapsed() >= idleLimit || hardTimer.elapsed() >= hardLimit)
+            break;
+    }
+
+    res.output = *requiredOutput;
+    res.successPatternMatched = successMatched;
+    res.failurePatternMatched = failureMatched;
+    res.promptSeen = promptSeen;
+
+    if(failureMatched)
+        res.status = EXEC_FAILED;
+    else if(successMatched)
+        res.status = EXEC_OK;
+    else if(promptSeen && trigger.expectedOutputs.isEmpty())
+        res.status = EXEC_OK; // command completed; caller validates the effect (e.g. read-back)
+    else if(promptSeen)
+        res.status = EXEC_FAILED; // completed but the success marker never appeared
+    else if(clientExited)
+        res.status = EXEC_ABORTED;
+    else
+        res.status = EXEC_TIMEOUT;
+
+    isRequiringOutput = false;
+    return res;
+}
+
 QString Util::execCMDWithOutput(const QString& cmd, ReturnTrigger trigger, bool rawOutput)
 {
     // if the trigger is empty, this function will wait trigger.waitTime then return all outputs during the wait time.
     // otherwise, this function will return empty string if no trigger is detected, or return outputs if any trigger is detected.
     // the waitTime will be refreshed if the client have new outputs
-    bool isResultFound = false;
-    QRegularExpression re;
-    re.setPatternOptions(QRegularExpression::DotMatchesEverythingOption);
-
-    if(!isRunning)
-        return "";
-    QTime currTime = QTime::currentTime();
-    QTime targetTime = QTime::currentTime().addMSecs(trigger.waitTime);
-    isRequiringOutput = true;
-    requiredOutput->clear();
-    execCMD(cmd);
-    while(QTime::currentTime() < targetTime)
-    {
-        if(!isRunning)
-            break;
-        QApplication::processEvents();
-//        qDebug() << "currOutput:" << *requiredOutput;
-        for(QString otpt : trigger.expectedOutputs)
-        {
-            re.setPattern(otpt);
-            isResultFound = re.match(*requiredOutput).hasMatch();
-            if(isResultFound)
-            {
-                qDebug() << "output Matched: " << *requiredOutput;
-                break;
-            }
-        }
-        if(isResultFound)
-        {
-            delay(200);
-            break;
-        }
-        if(timeStamp > currTime) //has new output
-        {
-            currTime = timeStamp;
-            targetTime = timeStamp.addMSecs(trigger.waitTime);
-        }
-    }
-    isRequiringOutput = false;
+    ExecResult result = execCMDWithResult(cmd, trigger, rawOutput);
 
     // For functions without expected outputs in the return trigger, the result is the raw output.
     // For functions with expected outputs in the return trigger,
     // if rawOutput=true, the result is the raw output,
-    // otherwise, if the raw output contains one of the expected outputs, the result is the raw output,
+    // otherwise, if the status is OK, the result is the raw output,
     // otherwise, the result is empty(as a failed flag).
-    return (trigger.expectedOutputs.isEmpty() || isResultFound || rawOutput ? *requiredOutput : "");
+    if(trigger.expectedOutputs.isEmpty() || result.isOk() || rawOutput)
+        return result.output;
+    return "";
 }
 
 void Util::delay(unsigned int msec)
 {
-    QTime timer = QTime::currentTime().addMSecs(msec);
-    while(QTime::currentTime() < timer)
+    QElapsedTimer timer;
+    timer.start();
+    while(timer.elapsed() < (qint64)msec)
         QApplication::processEvents(QEventLoop::AllEvents, 100);
 }
 

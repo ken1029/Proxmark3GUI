@@ -11,6 +11,8 @@
 #include <QProcessEnvironment>
 #include <QDir>
 
+#include <atomic>
+
 #include "util.h"
 
 class PM3Process : public QProcess
@@ -19,6 +21,11 @@ class PM3Process : public QProcess
 public:
     explicit PM3Process(QThread* thread, QObject* parent = nullptr);
     bool waitForReadyRead(int msecs = 2000);
+    // Wall clock of the last connectPM3() run, for the status bar.
+    qint64 lastConnectMs = 0;
+    // Set from the GUI thread on shutdown so the connect wait loops give up at once.
+    void requestStop();
+    std::atomic<bool> stopRequested{false};
 
     void testThread();
 
@@ -43,11 +50,15 @@ private:
     QString currPath;
     QString currPort = "";
     QStringList currArgs;
+    QString clientVersion;
+    QString firmwareVersion;
+    QString targetName;
 
 signals:
     void PM3StatedChanged(bool st, const QString& info = "");
     void newOutput(const QString& output);
     void changeClientType(Util::ClientType);
+    void PM3VersionInfo(const QString& clientVersion, const QString& firmwareVersion, const QString& target, bool mismatch, bool clientQtPlot);
     void HWConnectFailed();
 };
 
