@@ -1297,9 +1297,14 @@ void MfcWorkbench::saveBackup()
 bool MfcWorkbench::writeBlockOnce(int block, const QString& hex, QString* error)
 {
     const int sector = doc.spec().sectorOfBlock(block);
-    char keyType = 'A';
-    QString key;
-    if(!chooseVerifiedKey(sector, &keyType, &key))
+    QList<QPair<char, QString>> candidates;
+    for(char type : {'A', 'B'})
+    {
+        const Mfc::KeyEntry& entry = doc.key(sector, type);
+        if(entry.verified() && entry.hasValue())
+            candidates.append(qMakePair(type, entry.value));
+    }
+    if(candidates.isEmpty())
     {
         if(error != nullptr)
             *error = tr("no verified key for sector %1").arg(sector);
@@ -1307,42 +1312,48 @@ bool MfcWorkbench::writeBlockOnce(int block, const QString& hex, QString* error)
     }
 
     const QVariantMap config = configMap.value("normal write block").toMap();
-    QString cmd = config.value("cmd").toString();
-    if(cmd.isEmpty())
-        cmd = QStringLiteral("hf mf wrbl --blk <block> -<key type> -k <key> -d <data> --force");
     const QVariantMap types = config.value("key type").toMap();
-    const QString typeName = QString(QChar(keyType));
-    cmd.replace(QStringLiteral("<block>"), QString::number(block));
-    cmd.replace(QStringLiteral("<key type>"), types.value(typeName).toString().isEmpty()
-                ? typeName.toLower() : types.value(typeName).toString());
-    cmd.replace(QStringLiteral("<key>"), key);
-    cmd.replace(QStringLiteral("<data>"), hex);
-    Util::ExecResult result = util->execCMDWithResult(cmd, Pm3Cmd::makeWriteTrigger(config, 3000));
-    if(!result.isOk())
+    QString lastError;
+    for(const auto& candidate : candidates)
     {
-        if(error != nullptr)
-            *error = tr("write failed or timed out");
-        return false;
-    }
+        const char keyType = candidate.first;
+        const QString& key = candidate.second;
+        QString cmd = config.value("cmd").toString();
+        if(cmd.isEmpty())
+            cmd = QStringLiteral("hf mf wrbl --blk <block> -<key type> -k <key> -d <data> --force");
+        const QString typeName = QString(QChar(keyType));
+        cmd.replace(QStringLiteral("<block>"), QString::number(block));
+        cmd.replace(QStringLiteral("<key type>"), types.value(typeName).toString().isEmpty()
+                    ? typeName.toLower() : types.value(typeName).toString());
+        cmd.replace(QStringLiteral("<key>"), key);
+        cmd.replace(QStringLiteral("<data>"), hex);
+        Util::ExecResult result = util->execCMDWithResult(cmd, Pm3Cmd::makeWriteTrigger(config, 3000));
+        if(!result.isOk())
+        {
+            lastError = tr("write failed or timed out");
+            continue;
+        }
 
-    // Read back.  A trailer may mask the other key with '?'; that is not a
-    // verified mismatch, but a readable different value is.
-    QString readBack;
-    QString readError;
-    if(!readBlockOnce(block, keyType, key, &readBack, &readError))
-    {
-        if(error != nullptr)
-            *error = tr("write ok, read-back failed: %1").arg(readError);
-        return false;
+        // Read back.  A trailer may mask the other key with '?'; that is not a
+        // verified mismatch, but a readable different value is.
+        QString readBack;
+        QString readError;
+        if(!readBlockOnce(block, keyType, key, &readBack, &readError))
+        {
+            lastError = tr("write ok, read-back failed: %1").arg(readError);
+            continue;
+        }
+        if(readBack != hex && !readBack.contains(QLatin1Char('?')))
+        {
+            lastError = tr("read-back mismatch");
+            continue;
+        }
+        doc.setBlock(block, hex, Mfc::BlockState::Verified);
+        return true;
     }
-    if(readBack != hex && !readBack.contains(QLatin1Char('?')))
-    {
-        if(error != nullptr)
-            *error = tr("read-back mismatch");
-        return false;
-    }
-    doc.setBlock(block, hex, Mfc::BlockState::Verified);
-    return true;
+    if(error != nullptr)
+        *error = lastError;
+    return false;
 }
 
 void MfcWorkbench::writePlan()
