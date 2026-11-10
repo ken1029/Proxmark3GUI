@@ -17,6 +17,44 @@ Util::Util(QObject *parent) : QObject(parent)
     timeStamp.start();
     qRegisterMetaType<Util::ClientType>("Util::ClientType");
     qRegisterMetaType<Util::ExecStatus>("Util::ExecStatus");
+    qRegisterMetaType<Util::ExecResult>("Util::ExecResult");
+
+    asyncTimer = new QTimer(this);
+    asyncTimer->setInterval(100);
+    connect(asyncTimer, &QTimer::timeout, this, [this]() {
+        if(!asyncActive)
+            return;
+        const QString clean = stripAnsi(*requiredOutput);
+        const bool failure = matchAnyPattern(clean, asyncCommand.failurePatterns);
+        const bool success = matchAnyPattern(clean, asyncCommand.successPatterns);
+        const bool marker = asyncCommand.useCompletionMarker && hasCompletionMarker(clean, asyncToken);
+
+        if(failure)
+        {
+            finishAsync(EXEC_FAILED, success, true, marker);
+            return;
+        }
+        if(!isRunning)
+        {
+            finishAsync(EXEC_ABORTED, success, false, marker);
+            return;
+        }
+        if(marker)
+        {
+            // Empty success patterns mean "the command itself completed"; the
+            // caller inspects the parsed table to decide partial/completed.
+            finishAsync((success || asyncCommand.successPatterns.isEmpty()) ? EXEC_OK : EXEC_FAILED,
+                        success, false, true);
+            return;
+        }
+        if(!asyncCommand.useCompletionMarker && success)
+        {
+            finishAsync(EXEC_OK, true, false, false);
+            return;
+        }
+        if(asyncCommand.hardTimeoutMs > 0 && asyncHardTimer.elapsed() >= asyncCommand.hardTimeoutMs)
+            finishAsync(EXEC_TIMEOUT, success, false, marker);
+    });
 }
 
 
@@ -28,14 +66,85 @@ void Util::processOutput(const QString& output)
         requiredOutput->append(output);
         timeStamp.restart();
     }
+    if(asyncActive)
+        emit commandOutput(output);
     emit refreshOutput(output);
 }
 
 void Util::execCMD(const QString& cmd)
 {
     qDebug() << "executing: " << cmd;
+    if(asyncActive)
+    {
+        qWarning() << "ignoring command while a long task owns the client:" << cmd;
+        return;
+    }
     if(isRunning)
         emit write(cmd + "\n");
+}
+
+bool Util::startCommand(const AsyncCommand& command)
+{
+    if(!isRunning || asyncActive || isRequiringOutput)
+    {
+        qWarning() << "cannot start long command:" << command.cmd
+                   << "running=" << isRunning << "busy=" << asyncActive;
+        return false;
+    }
+    asyncCommand = command;
+    asyncActive = true;
+    asyncCancelRequested = false;
+    asyncToken = command.useCompletionMarker ? makeCompletionToken("PM3GUI_TASK") : QString();
+    asyncLastLen = 0;
+    asyncHardTimer.start();
+
+    isRequiringOutput = true;
+    requiredOutput->clear();
+    timeStamp.start();
+
+    QString wire = command.cmd + "\n";
+    // Only safe for commands that do not poll stdin.  Recovery commands are
+    // non-interactive; simulation/sniff must never use this path.
+    if(!asyncToken.isEmpty())
+        wire += "rem " + asyncToken + "\n";
+    qDebug() << "long task:" << command.cmd << "marker=" << asyncToken;
+    emit write(wire);
+
+    asyncTimer->start();
+    return true;
+}
+
+void Util::cancelCommand(bool abortClient)
+{
+    if(!asyncActive)
+        return;
+    asyncCancelRequested = true;
+    if(abortClient)
+        emit abortClientRequested();
+    // The already received output belongs to the caller; preserve it.
+    finishAsync(EXEC_CANCELLED, false, false, false);
+}
+
+void Util::finishAsync(ExecStatus status, bool successPatternMatched,
+                       bool failurePatternMatched, bool completionMarkerSeen)
+{
+    if(!asyncActive)
+        return;
+    asyncTimer->stop();
+    asyncActive = false;
+    isRequiringOutput = false;
+
+    ExecResult result;
+    result.output = *requiredOutput;
+    result.status = status;
+    result.successPatternMatched = successPatternMatched;
+    result.failurePatternMatched = failurePatternMatched;
+    result.completionMarkerSeen = completionMarkerSeen;
+    result.promptSeen = false;
+    qDebug() << "long task finished:" << status << "cancel=" << asyncCancelRequested
+             << "bytes=" << result.output.size();
+
+    emit commandFinished(result, result.output);
 }
 
 QString Util::stripAnsi(const QString& text)
@@ -95,6 +204,11 @@ Util::ExecResult Util::execCMDWithResult(const QString& cmd, const ReturnTrigger
 {
     Q_UNUSED(rawOutput)
     ExecResult res;
+    if(asyncActive)
+    {
+        res.status = EXEC_BUSY;
+        return res;
+    }
     if(!isRunning)
     {
         res.status = EXEC_NOT_RUNNING;

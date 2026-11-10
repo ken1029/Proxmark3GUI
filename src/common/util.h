@@ -36,6 +36,8 @@ public:
         EXEC_FAILED,      // a failure marker was printed, or the command completed without its success marker
         EXEC_NOT_RUNNING, // the client process is not running
         EXEC_ABORTED,     // the client exited while the command was running
+        EXEC_BUSY,        // another (blocking or long) command owns the client
+        EXEC_CANCELLED,   // the user stopped waiting for this command
     };
 
     struct ExecResult
@@ -98,12 +100,31 @@ public:
         }
     };
 
+    // A long-running command (recovery, dump).  It has no idle timeout: a CPU
+    // phase may print nothing for minutes, so only the client exiting, an
+    // explicit failure marker, the completion marker or the hard timeout ends
+    // it.  Commands that poll stdin must not set useCompletionMarker.
+    struct AsyncCommand
+    {
+        QString cmd;
+        QStringList successPatterns;
+        QStringList failurePatterns;
+        bool useCompletionMarker = false;
+        qint64 hardTimeoutMs = 0; // 0 = no hard timeout
+        QString label;
+    };
+
     Q_ENUM(Util::ClientType)
     Q_ENUM(Util::ExecStatus)
 
     explicit Util(QObject *parent = nullptr);
 
     void execCMD(const QString& cmd);
+    // Long command API.  The caller must keep the GUI responsive and poll
+    // commandFinished(); the device stays owned until it arrives.
+    bool startCommand(const AsyncCommand& command);
+    void cancelCommand(bool abortClient);
+    bool isCommandActive() const { return asyncActive; }
     ExecResult execCMDWithResult(const QString& cmd, const ReturnTrigger& trigger = ReturnTrigger(10000), bool rawOutput = false);
     QString execCMDWithOutput(const QString& cmd, ReturnTrigger trigger = 10000, bool rawOutput = false);
     void delay(unsigned int msec);
@@ -130,11 +151,27 @@ private:
     bool isRunning;
     QString* requiredOutput;
     QElapsedTimer timeStamp;
+    QTimer* asyncTimer = nullptr;
+    AsyncCommand asyncCommand;
+    bool asyncActive = false;
+    bool asyncCancelRequested = false;
+    QString asyncToken;
+    int asyncLastLen = 0;
+    QElapsedTimer asyncHardTimer;
+    void finishAsync(ExecStatus status, bool successPatternMatched = false,
+                     bool failurePatternMatched = false, bool completionMarkerSeen = false);
+
     static ClientType clientType;
     static Ui::MainWindow *ui;
 signals:
     void refreshOutput(const QString& output);
+    void commandOutput(const QString& output);
+    void commandFinished(const Util::ExecResult& result, const QString& output);
+    // The GUI must disconnect/reconnect the client (existing Stop semantics).
+    void abortClientRequested();
     void write(QString data); // connected to PM3Process::write(QString data);
 };
+
+Q_DECLARE_METATYPE(Util::ExecResult)
 
 #endif // UTIL_H

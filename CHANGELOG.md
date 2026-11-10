@@ -2,6 +2,19 @@
 
 [中文](doc/CHANGELOG/CHANGELOG_zh_CN.md)  
 
+### V0.3.0 (feature/mfc-workbench)
++ Add the MFC workbench page: one document model for data, keys, validity, modification and recovery state
++ Fix RRG `key.bin` interoperability: export all key A then all key B; keep the legacy A0 B0 layout as an explicit import/export choice
++ Refuse to write raw binary dumps with unread blocks; EML uses `?`, JSON keeps block/key state and a SHA-256 digest
++ Validate BIN/EML/JSON and key files before replacing the current document; reject truncated or malformed input with a line/size error
++ Add offline A/B comparison with same/different/unknown/incomparable states, capacity/UID notes and a Markdown/CSV report
++ Add per-sector key state (unknown/candidate/verified/failed) and source (manual/import/dictionary/recovery/card)
++ Add recovery method advice (dictionary, autopwn, nested, staticnested, hardnested, darkside, sen, isen) with explicit preconditions
++ Parse client key tables by the sector/block columns, not row order; partial, duplicate and out-of-range rows cannot shift a key
++ Add long-task execution without an idle timeout, with marker completion, hard timeout, cancel semantics and one-device-task ownership
++ Add controlled write plans: data blocks by default, Block 0/trailers opt-in, card preview, read-back verification and failure list
++ Connect verified recovery keys to reading, backup and comparison without re-typing them
+
 ### V0.2.10
 + Marker mode now accepts only the matching `remark:` reply; a split `pm3 --> ` echo is no longer a completion boundary (writes, emulator, trace load/save, handshake)
 + Add explicit interactive-prompt mode for clients that really print a trailing prompt

@@ -13,9 +13,12 @@
 #include "common/util.h"
 #include "common/pm3cmd.h"
 #include "common/capabilities.h"
+#include "module/mfcdocument.h"
+#include "module/mfckeyrecovery.h"
 #include "common/pm3process.h"
 #include "ui/mf_sim_simdialog.h"
 #include "ui/mainwindow.h"
+#include "ui/mfcworkbench.h"
 #include <QComboBox>
 #include <QMessageBox>
 #include <QSettings>
@@ -1365,6 +1368,540 @@ private slots:
         QTest::qWait(200);
         QVERIFY2(QFile::remove(scriptPath), "mock client is still running (file locked)");
     }
+
+    // ******************** MFC document / recovery ********************
+
+    void mfcSpecMapping()
+    {
+        const Mfc::Spec mini = Mfc::Spec::get(Mfc::CardType::Mini);
+        QCOMPARE(mini.sectorCount, 5);
+        QCOMPARE(mini.blockCount, 20);
+        QCOMPARE(mini.trailerBlockOfSector(4), 19);
+
+        const Mfc::Spec m1k = Mfc::Spec::get(Mfc::CardType::M1K);
+        QCOMPARE(m1k.trailerBlockOfSector(15), 63);
+        QCOMPARE(m1k.sectorOfBlock(63), 15);
+        QVERIFY(m1k.isTrailerBlock(63));
+        QVERIFY(!m1k.isTrailerBlock(62));
+
+        const Mfc::Spec m2k = Mfc::Spec::get(Mfc::CardType::M2K);
+        QCOMPARE(m2k.trailerBlockOfSector(31), 127);
+
+        const Mfc::Spec m4k = Mfc::Spec::get(Mfc::CardType::M4K);
+        QCOMPARE(m4k.blocksInSector(31), 4);
+        QCOMPARE(m4k.blocksInSector(32), 16);
+        QCOMPARE(m4k.firstBlockOfSector(32), 128);
+        QCOMPARE(m4k.trailerBlockOfSector(32), 143);
+        QCOMPARE(m4k.sectorOfBlock(143), 32);
+        QCOMPARE(m4k.trailerBlockOfSector(39), 255);
+        QCOMPARE(m4k.sectorOfBlock(255), 39);
+        QCOMPARE(m4k.sectorOfBlock(256), -1);
+    }
+
+    void mfcKeyLayoutRoundTrip()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        Mfc::Document doc(Mfc::CardType::M1K);
+        for(int s = 0; s < doc.sectorCount(); s++)
+        {
+            const QString a = QStringLiteral("%1").arg(s + 1, 12, 16, QLatin1Char('0')).toUpper();
+            const QString b = QStringLiteral("%1").arg(0x100 + s, 12, 16, QLatin1Char('0')).toUpper();
+            doc.setKey(s, 'A', a, Mfc::KeyState::Verified, Mfc::KeySource::Manual);
+            doc.setKey(s, 'B', b, Mfc::KeyState::Pending, Mfc::KeySource::Imported);
+        }
+
+        const QString rrgPath = dir.filePath("key-rrg.bin");
+        Mfc::IoResult saved = doc.saveKeyFile(rrgPath, "rrg");
+        QVERIFY2(saved.ok, qPrintable(saved.error));
+        QFile rrg(rrgPath);
+        QVERIFY(rrg.open(QFile::ReadOnly));
+        const QByteArray rrgBytes = rrg.readAll();
+        QCOMPARE(rrgBytes.size(), 16 * 12);
+        QCOMPARE(rrgBytes.mid(0, 6).toHex().toUpper(), QByteArray("000000000001"));
+        QCOMPARE(rrgBytes.mid(6, 6).toHex().toUpper(), QByteArray("000000000002"));
+        // RRG layout: all key A first, key B starts at sector count * 6.
+        QCOMPARE(rrgBytes.mid(16 * 6, 6).toHex().toUpper(), QByteArray("000000000100"));
+
+        const QString legacyPath = dir.filePath("key-legacy.bin");
+        QVERIFY(doc.saveKeyFile(legacyPath, "legacy").ok);
+        QFile legacy(legacyPath);
+        QVERIFY(legacy.open(QFile::ReadOnly));
+        const QByteArray legacyBytes = legacy.readAll();
+        QCOMPARE(legacyBytes.mid(0, 6).toHex().toUpper(), QByteArray("000000000001"));
+        QCOMPARE(legacyBytes.mid(6, 6).toHex().toUpper(), QByteArray("000000000100"));
+
+        Mfc::Document loaded;
+        Mfc::IoResult result = Mfc::Document::loadKeyFile(rrgPath, "rrg", &loaded);
+        QVERIFY2(result.ok, qPrintable(result.error));
+        QCOMPARE(loaded.cardType(), Mfc::CardType::M1K);
+        QCOMPARE(loaded.key(1, 'A').value, QString("000000000002"));
+        QCOMPARE(loaded.key(0, 'B').value, QString("000000000100"));
+        QCOMPARE(loaded.key(0, 'A').state, Mfc::KeyState::Pending);
+
+        Mfc::Document legacyLoaded;
+        QVERIFY(Mfc::Document::loadKeyFile(legacyPath, "legacy", &legacyLoaded).ok);
+        QCOMPARE(legacyLoaded.key(1, 'A').value, QString("000000000002"));
+        QCOMPARE(legacyLoaded.key(0, 'B').value, QString("000000000100"));
+
+        Mfc::Document ambiguous;
+        Mfc::IoResult autoResult = Mfc::Document::loadKeyFile(rrgPath, "auto", &ambiguous);
+        QVERIFY(!autoResult.ok);
+        QVERIFY(autoResult.ambiguousLayout);
+    }
+
+    void mfcDataRoundTrip()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        Mfc::Document doc(Mfc::CardType::M1K);
+        doc.uid = "11223344";
+        QVERIFY(doc.setBlock(0, "11223344556677889900AABBCCDDEEFF", Mfc::BlockState::Read));
+        QVERIFY(doc.setBlock(1, "000102030405060708090A0B0C0D0E0F", Mfc::BlockState::Modified));
+        QVERIFY(doc.setBlock(2, "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF", Mfc::BlockState::Read));
+        QCOMPARE(doc.completeBlockCount(), 3);
+        QCOMPARE(doc.unknownBlockCount(), 61);
+        QCOMPARE(doc.modifiedBlockCount(), 1);
+
+        const QString binPath = dir.filePath("dump.bin");
+        Mfc::IoResult binResult = doc.saveDataFile(binPath, "bin");
+        QVERIFY(!binResult.ok); // 61 unknown blocks must not silently become 00
+
+        Mfc::IoResult binAllowed = doc.saveDataFile(binPath, "bin", true);
+        QVERIFY2(binAllowed.ok, qPrintable(binAllowed.error));
+        QVERIFY(!binAllowed.warning.isEmpty());
+        QFile bin(binPath);
+        QVERIFY(bin.open(QFile::ReadOnly));
+        QCOMPARE(bin.size(), 1024);
+
+        Mfc::Document fromBin;
+        Mfc::IoResult loadBin = Mfc::Document::loadDataFile(binPath, "bin", &fromBin);
+        QVERIFY2(loadBin.ok, qPrintable(loadBin.error));
+        QCOMPARE(fromBin.cardType(), Mfc::CardType::M1K);
+        QCOMPARE(fromBin.blockHex(0), QString("11223344556677889900AABBCCDDEEFF"));
+        QCOMPARE(fromBin.blockState(3), Mfc::BlockState::Read);
+        QCOMPARE(fromBin.uid, QString("11223344"));
+
+        const QString emlPath = dir.filePath("dump.eml");
+        QVERIFY(doc.saveDataFile(emlPath, "eml").ok);
+        QFile eml(emlPath);
+        QVERIFY(eml.open(QFile::ReadOnly));
+        const QList<QByteArray> lines = eml.readAll().split('\n');
+        QCOMPARE(lines.size(), 65); // 64 lines + trailing newline
+        QCOMPARE(lines.at(0), QByteArray("11223344556677889900AABBCCDDEEFF"));
+        QCOMPARE(lines.at(5), QByteArray("????????????????????????????????"));
+
+        Mfc::Document fromEml;
+        Mfc::IoResult loadEml = Mfc::Document::loadDataFile(emlPath, "eml", &fromEml);
+        QVERIFY2(loadEml.ok, qPrintable(loadEml.error));
+        QCOMPARE(fromEml.blockState(0), Mfc::BlockState::Read);
+        QCOMPARE(fromEml.blockState(5), Mfc::BlockState::Unknown);
+        QCOMPARE(fromEml.unknownBlockCount(), 61);
+
+        const QString jsonPath = dir.filePath("dump.json");
+        QVERIFY(doc.saveDataFile(jsonPath, "json").ok);
+        Mfc::Document fromJson;
+        QVERIFY(Mfc::Document::loadDataFile(jsonPath, "auto", &fromJson).ok);
+        QCOMPARE(fromJson.cardType(), Mfc::CardType::M1K);
+        QCOMPARE(fromJson.uid, doc.uid);
+        QCOMPARE(fromJson.blockState(1), Mfc::BlockState::Modified);
+        QCOMPARE(fromJson.blockState(5), Mfc::BlockState::Unknown);
+        QCOMPARE(fromJson.sha256(), doc.sha256());
+    }
+
+    void mfcImportValidation()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        Mfc::Document doc(Mfc::CardType::M1K);
+        QVERIFY(doc.setBlock(0, "AABBCCDDEEFF00112233445566778899", Mfc::BlockState::Read));
+
+        const QString shortBin = dir.filePath("short.bin");
+        QFile shortFile(shortBin);
+        QVERIFY(shortFile.open(QFile::WriteOnly));
+        shortFile.write(QByteArray(100, '\0'));
+        shortFile.close();
+        Mfc::IoResult result = Mfc::Document::loadDataFile(shortBin, "bin", &doc);
+        QVERIFY(!result.ok);
+        QVERIFY(result.error.contains("size"));
+        QCOMPARE(doc.blockHex(0), QString("AABBCCDDEEFF00112233445566778899"));
+
+        const QString badEml = dir.filePath("bad.eml");
+        QFile bad(badEml);
+        QVERIFY(bad.open(QFile::WriteOnly));
+        QByteArray eml;
+        for(int i = 0; i < 64; i++)
+            eml += (i == 3) ? "ZZ\n" : "00000000000000000000000000000000\r\n";
+        bad.write(eml);
+        bad.close();
+        result = Mfc::Document::loadDataFile(badEml, "eml", &doc);
+        QVERIFY(!result.ok);
+        QVERIFY(result.error.contains("line 4"));
+        QCOMPARE(doc.blockHex(0), QString("AABBCCDDEEFF00112233445566778899"));
+
+        const QString truncated = dir.filePath("trunc.eml");
+        QFile truncFile(truncated);
+        QVERIFY(truncFile.open(QFile::WriteOnly));
+        truncFile.write("00000000000000000000000000000000\n");
+        truncFile.close();
+        result = Mfc::Document::loadDataFile(truncated, "eml", &doc);
+        QVERIFY(!result.ok);
+        QVERIFY(result.error.contains("1 lines"));
+
+        const QString keyText = dir.filePath("keys.txt");
+        QFile keyFile(keyText);
+        QVERIFY(keyFile.open(QFile::WriteOnly));
+        keyFile.write("0:A:FFFFFFFFFFFF\n0:B:1234567890AB\n1:A:AAAABBBBCCCC\n");
+        keyFile.close();
+        Mfc::Document textDoc;
+        result = Mfc::Document::loadKeyFile(keyText, "auto", &textDoc);
+        QVERIFY2(result.ok, qPrintable(result.error));
+        QCOMPARE(textDoc.cardType(), Mfc::CardType::M1K);
+        QCOMPARE(textDoc.key(0, 'A').value, QString("FFFFFFFFFFFF"));
+        QCOMPARE(textDoc.key(0, 'B').value, QString("1234567890AB"));
+        QCOMPARE(textDoc.key(1, 'A').value, QString("AAAABBBBCCCC"));
+        QCOMPARE(textDoc.key(0, 'A').state, Mfc::KeyState::Pending);
+    }
+
+    void mfcCompare()
+    {
+        Mfc::Document a(Mfc::CardType::M1K);
+        Mfc::Document b(Mfc::CardType::M1K);
+        a.uid = "11223344";
+        b.uid = "11223344";
+        for(int i = 0; i < a.blockCount(); i++)
+        {
+            const QString data = QString("%1").arg(i, 32, 16, QLatin1Char('0')).toUpper();
+            a.setBlock(i, data, Mfc::BlockState::Read);
+            b.setBlock(i, data, Mfc::BlockState::Read);
+        }
+        Mfc::CompareResult same = a.compare(b);
+        QCOMPARE(same.same, 64);
+        QCOMPARE(same.different, 0);
+        QCOMPARE(same.unknown, 0);
+        QCOMPARE(same.incomparable, 0);
+
+        b.setBlock(1, "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF", Mfc::BlockState::Read);
+        b.setBlock(2, QString(), Mfc::BlockState::Unknown);
+        Mfc::CompareResult diff = a.compare(b);
+        QCOMPARE(diff.different, 1);
+        QCOMPARE(diff.unknown, 1);
+        QCOMPARE(diff.same, 62);
+
+        Mfc::Document c(Mfc::CardType::M2K);
+        c.uid = "55667788";
+        for(int i = 0; i < c.blockCount(); i++)
+            c.setBlock(i, QString("%1").arg(i, 32, 16, QLatin1Char('0')).toUpper(), Mfc::BlockState::Read);
+        Mfc::CompareResult capacity = a.compare(c);
+        QVERIFY(capacity.capacityMismatch);
+        QVERIFY(capacity.uidMismatch);
+        QCOMPARE(capacity.incomparable, 64);
+        QCOMPARE(capacity.same, 64);
+    }
+
+    void mfcRecoveryParser()
+    {
+        const Mfc::Spec spec = Mfc::Spec::get(Mfc::CardType::M1K);
+        const QString output =
+            "-----+-----+--------------+---+--------------+----\n"
+            " Sec | Blk | key A        |res| key B        |res\n"
+            "-----+-----+--------------+---+--------------+----\n"
+            " 015 | 063 | FFFFFFFFFFFF | D | 1234567890AB | 1 \n"
+            " 000 | 003 | A0A1A2A3A4A5 | H | ------------ | 0 \n"
+            " 002 | 011 | 111111111111 | 0 | 222222222222 | 0 \n"
+            " 002 | 011 | 333333333333 | D | 444444444444 | D \n"
+            " 007 | 099 | 555555555555 | D | 666666666666 | D \n"
+            " 999 | 003 | 777777777777 | D | 888888888888 | D \n"
+            "-----+-----+--------------+---+--------------+----\n"
+            "Static enc nonce... yes\n"
+            "time in checkkeys 1 seconds\n";
+        MfcRecovery::ParseResult parsed = MfcRecovery::parseOutput(output, spec);
+        QVERIFY(parsed.sawTable);
+        QVERIFY(parsed.sawCompletion);
+        QCOMPARE(parsed.nonce, MfcRecovery::NonceType::StaticEncrypted);
+        QCOMPARE(parsed.keys.size(), 8); // 4 valid rows x 2 keys; 2 rows were rejected
+
+        auto find = [&parsed](int sector, char type) {
+            for(const MfcRecovery::Candidate& c : parsed.keys)
+                if(c.sector == sector && c.type == type)
+                    return c;
+            return MfcRecovery::Candidate();
+        };
+        QVERIFY(find(15, 'A').found);
+        QCOMPARE(find(15, 'A').key, QString("FFFFFFFFFFFF"));
+        QVERIFY(find(15, 'B').found);
+        QCOMPARE(find(0, 'A').source, Mfc::KeySource::Recovery);
+        QVERIFY(!find(0, 'B').found);
+        QVERIFY(!find(2, 'A').found); // result 0 is not a hit
+        QCOMPARE(find(2, 'A').key, QString("111111111111"));
+        QVERIFY(parsed.warnings.size() >= 1); // mismatched block 099 and sector 999
+
+        MfcRecovery::ParseResult staticNonce = MfcRecovery::parseOutput(
+            "Static nonce... yes, even when nested\n", spec);
+        QCOMPARE(staticNonce.nonce, MfcRecovery::NonceType::SuperStatic);
+        MfcRecovery::ParseResult normal = MfcRecovery::parseOutput("Prng....... hard\n", spec);
+        QCOMPARE(normal.nonce, MfcRecovery::NonceType::Normal);
+
+        QCOMPARE(MfcRecovery::detectStage("... Hardnested ...\nCalculating..."), QString("compute"));
+        QCOMPARE(MfcRecovery::detectStage("Found valid key [ FFFFFFFFFFFF ]"), QString("done"));
+    }
+
+    void mfcRecoveryMerge()
+    {
+        Mfc::Document doc(Mfc::CardType::M1K);
+        doc.setKeyVerified(0, 'A', "AAAAAAAAAAAA", Mfc::KeySource::Manual);
+        doc.setKey(0, 'B', "FFFFFFFFFFFF", Mfc::KeyState::Pending, Mfc::KeySource::Imported);
+
+        MfcRecovery::ParseResult parsed;
+        MfcRecovery::Candidate same;
+        same.sector = 0;
+        same.type = 'A';
+        same.key = "AAAAAAAAAAAA";
+        same.found = true;
+        parsed.keys.append(same);
+        MfcRecovery::Candidate conflict;
+        conflict.sector = 0;
+        conflict.type = 'A';
+        conflict.key = "BBBBBBBBBBBB";
+        conflict.found = true;
+        parsed.keys.append(conflict);
+        MfcRecovery::Candidate ff;
+        ff.sector = 0;
+        ff.type = 'B';
+        ff.key = "FFFFFFFFFFFF";
+        ff.found = true;
+        ff.marker = 'D';
+        ff.source = Mfc::KeySource::Dictionary;
+        parsed.keys.append(ff);
+        MfcRecovery::Candidate added;
+        added.sector = 1;
+        added.type = 'A';
+        added.key = "CCCCCCCCCCCC";
+        added.found = true;
+        parsed.keys.append(added);
+
+        MfcRecovery::MergeResult merged = MfcRecovery::merge(parsed, &doc, true, Mfc::KeySource::Recovery);
+        QCOMPARE(merged.conflicts, 1);
+        QCOMPARE(doc.key(0, 'A').value, QString("AAAAAAAAAAAA"));
+        QCOMPARE(doc.key(0, 'B').state, Mfc::KeyState::Verified);
+        QCOMPARE(doc.key(1, 'A').value, QString("CCCCCCCCCCCC"));
+        QCOMPARE(doc.key(1, 'A').state, Mfc::KeyState::Verified);
+        QCOMPARE(doc.verifiedKeyCount(), 3);
+
+        Mfc::Document pending(Mfc::CardType::M1K);
+        pending.setKey(2, 'A', "DDDDDDDDDDDD", Mfc::KeyState::Pending, Mfc::KeySource::Imported);
+        MfcRecovery::ParseResult failed;
+        MfcRecovery::Candidate miss;
+        miss.sector = 2;
+        miss.type = 'A';
+        miss.key = "DDDDDDDDDDDD";
+        miss.found = false;
+        failed.keys.append(miss);
+        MfcRecovery::merge(failed, &pending, true, Mfc::KeySource::Recovery);
+        QCOMPARE(pending.key(2, 'A').state, Mfc::KeyState::Failed);
+    }
+
+    void mfcRecoveryAdvice()
+    {
+        Mfc::Document empty(Mfc::CardType::M1K);
+        auto adviceFor = [](const QVector<MfcRecovery::Advice>& list, MfcRecovery::Method method) {
+            for(const MfcRecovery::Advice& advice : list)
+                if(advice.method == method)
+                    return advice;
+            return MfcRecovery::Advice();
+        };
+        QVector<MfcRecovery::Advice> advice = MfcRecovery::advise(empty, MfcRecovery::NonceType::Unknown);
+        QCOMPARE(advice.size(), 9);
+        QVERIFY(!adviceFor(advice, MfcRecovery::Method::Nested).applicable);
+        QVERIFY(adviceFor(advice, MfcRecovery::Method::Darkside).applicable);
+        QVERIFY(adviceFor(advice, MfcRecovery::Method::Darkside).preconditionUnverified);
+        QVERIFY(!adviceFor(advice, MfcRecovery::Method::Sen).applicable);
+        QVERIFY(adviceFor(advice, MfcRecovery::Method::Isen).applicable);
+
+        advice = MfcRecovery::advise(empty, MfcRecovery::NonceType::Static);
+        QVERIFY(adviceFor(advice, MfcRecovery::Method::StaticNested).applicable);
+        QVERIFY(!adviceFor(advice, MfcRecovery::Method::Darkside).applicable);
+        QVERIFY(!adviceFor(advice, MfcRecovery::Method::Hardnested).applicable);
+
+        advice = MfcRecovery::advise(empty, MfcRecovery::NonceType::StaticEncrypted);
+        QVERIFY(adviceFor(advice, MfcRecovery::Method::Sen).applicable);
+        QVERIFY(!adviceFor(advice, MfcRecovery::Method::Darkside).applicable);
+
+        Mfc::Document complete(Mfc::CardType::M1K);
+        for(int s = 0; s < complete.sectorCount(); s++)
+        {
+            complete.setKeyVerified(s, 'A', "FFFFFFFFFFFF", Mfc::KeySource::Manual);
+            complete.setKeyVerified(s, 'B', "FFFFFFFFFFFF", Mfc::KeySource::Manual);
+        }
+        advice = MfcRecovery::advise(complete, MfcRecovery::NonceType::Normal);
+        QVERIFY(adviceFor(advice, MfcRecovery::Method::KnownKeys).applicable);
+        QVERIFY(!adviceFor(advice, MfcRecovery::Method::Dictionary).applicable);
+        QVERIFY(!adviceFor(advice, MfcRecovery::Method::AutoPwn).applicable);
+    }
+
+    void mfcCommandBuilders()
+    {
+        QVariantMap profile = loadProfile("config_rrgv4.23346.json")["mifare classic"].toMap();
+        const Mfc::Spec spec = Mfc::Spec::get(Mfc::CardType::M1K);
+
+        MfcRecovery::Command check = MfcRecovery::buildCheck(profile, spec, QString(), true);
+        QCOMPARE(check.text, QString("hf mf chk --1k"));
+        QVERIFY(!check.usesStdin);
+        QCOMPARE(check.successPattern, QString());
+        check = MfcRecovery::buildCheck(profile, spec, "dict.dic", false);
+        QCOMPARE(check.text, QString("hf mf chk --1k -f \"dict.dic\" --no-default"));
+
+        MfcRecovery::Command autopwn = MfcRecovery::buildAutoPwn(profile, spec);
+        QCOMPARE(autopwn.text, QString("hf mf autopwn --1k --ns"));
+        QVERIFY(autopwn.hardTimeoutMs >= 30 * 60 * 1000);
+
+        MfcRecovery::Command nested = MfcRecovery::buildNested(profile, spec, false, 1, 'A', "FFFFFFFFFFFF");
+        QCOMPARE(nested.text, QString("hf mf nested --1k --blk 7 -a -k FFFFFFFFFFFF"));
+
+        MfcRecovery::Command hard = MfcRecovery::buildHardnested(profile, spec, 0, 'A', "AAAAAAAAAAAA", 2, 'B');
+        QCOMPARE(hard.text, QString("hf mf hardnested --blk 3 -a -k AAAAAAAAAAAA --tblk 11 --tb"));
+
+        QCOMPARE(MfcRecovery::buildDarkside(profile).text, QString("hf mf darkside"));
+        QCOMPARE(MfcRecovery::buildSen(profile).text, QString("hf mf sen"));
+        QCOMPARE(MfcRecovery::buildIsen(profile).text, QString("hf mf isen"));
+    }
+
+
+    void asyncCommandHasNoIdleTimeout()
+    {
+        Util util;
+        util.setRunningState(true);
+        QSignalSpy finished(&util, &Util::commandFinished);
+        QObject::connect(&util, &Util::write, &util, [&util](QString wire) {
+            const QString token = wire.mid(wire.indexOf("rem ") + 4).trimmed();
+            QTimer::singleShot(0, &util, [&util]() {
+                util.processOutput("[+] collecting nonces...\n");
+            });
+            // Long CPU phase: no output for well over any short-command idle
+            // timeout, then the completion marker.
+            QTimer::singleShot(450, &util, [&util, token]() {
+                util.processOutput("[+] remark: " + token + "\n");
+            });
+        });
+
+        Util::AsyncCommand command;
+        command.cmd = "hf mf autopwn --1k --ns";
+        command.useCompletionMarker = true;
+        command.hardTimeoutMs = 5000;
+        QVERIFY(util.startCommand(command));
+        QCOMPARE(util.execCMDWithResult("hf mf rdbl --blk 1", Util::ReturnTrigger(100)).status,
+                 Util::EXEC_BUSY);
+
+        QElapsedTimer timer;
+        timer.start();
+        while(finished.isEmpty() && timer.elapsed() < 4000)
+            QTest::qWait(20);
+        QCOMPARE(finished.count(), 1);
+        const QList<QVariant> args = finished.takeFirst();
+        QCOMPARE(args.at(0).value<Util::ExecResult>().status, Util::EXEC_OK);
+        QVERIFY(timer.elapsed() >= 400);
+        QVERIFY(!util.isCommandActive());
+    }
+
+    void asyncCommandCancelKeepsOutput()
+    {
+        Util util;
+        util.setRunningState(true);
+        QSignalSpy finished(&util, &Util::commandFinished);
+        QSignalSpy abortSpy(&util, &Util::abortClientRequested);
+        QObject::connect(&util, &Util::write, &util, [&util](QString) {
+            QTimer::singleShot(20, &util, [&util]() {
+                util.processOutput("[+] table row 000 | 003 | FFFFFFFFFFFF | 1\n");
+            });
+        });
+        Util::AsyncCommand command;
+        command.cmd = "hf mf chk --1k";
+        command.useCompletionMarker = true;
+        command.hardTimeoutMs = 5000;
+        QVERIFY(util.startCommand(command));
+        QTest::qWait(100);
+        util.cancelCommand(false);
+        QCOMPARE(finished.count(), 1);
+        const Util::ExecResult result = finished.first().at(0).value<Util::ExecResult>();
+        QCOMPARE(result.status, Util::EXEC_CANCELLED);
+        QVERIFY(result.output.contains("table row"));
+        QCOMPARE(abortSpy.count(), 0);
+
+        QVERIFY(util.startCommand(command));
+        QTest::qWait(50);
+        util.cancelCommand(true);
+        QCOMPARE(abortSpy.count(), 1);
+        QCOMPARE(finished.last().at(0).value<Util::ExecResult>().status, Util::EXEC_CANCELLED);
+    }
+
+    void workbenchPageAndCompare()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString oldCwd = QDir::currentPath();
+        QDir::setCurrent(dir.path());
+        QSettings settings("GUIsettings.ini", QSettings::IniFormat);
+        settings.setValue("language/name", "en_US");
+        settings.sync();
+
+        MainWindow window;
+        window.initUI();
+        MfcWorkbench* workbench = window.findChild<MfcWorkbench*>("mfcWorkbench");
+        QVERIFY2(workbench != nullptr, "workbench page must be part of the main window");
+        bool docked = false;
+        for(QDockWidget* dock : window.findChildren<QDockWidget*>())
+            if(dock->widget() == workbench)
+                docked = true;
+        QVERIFY2(docked, "workbench must be moved into a dock like the other pages");
+        QCOMPARE(workbench->document().cardType(), Mfc::CardType::M1K);
+        QVERIFY(!workbench->isTaskActive());
+
+        auto writeEml = [&dir](const QString& name, int differentBlock) {
+            const QString path = dir.filePath(name);
+            QFile file(path);
+            if(!file.open(QFile::WriteOnly | QFile::Text))
+                return QString();
+            for(int i = 0; i < 64; i++)
+            {
+                const QString line = (i == differentBlock)
+                                     ? QStringLiteral("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF")
+                                     : QStringLiteral("%1").arg(i, 32, 16, QLatin1Char('0')).toUpper();
+                file.write(line.toLatin1());
+                file.write("\n");
+            }
+            file.close();
+            return path;
+        };
+        const QString a = writeEml("a.eml", -1);
+        const QString b = writeEml("b.eml", 1);
+        QVERIFY(!a.isEmpty());
+        QVERIFY(!b.isEmpty());
+        QString error;
+        QVERIFY2(workbench->loadCompareFile(true, a, &error), qPrintable(error));
+        QVERIFY2(workbench->loadCompareFile(false, b, &error), qPrintable(error));
+        QVERIFY(QMetaObject::invokeMethod(workbench, "compareDocuments"));
+        const Mfc::CompareResult comparison = workbench->currentComparison();
+        QCOMPARE(comparison.same, 63);
+        QCOMPARE(comparison.different, 1);
+        QCOMPARE(comparison.unknown, 0);
+
+        // Ambiguous binary key layout must be reported, not guessed.
+        const QString keyPath = dir.filePath("key.bin");
+        QFile keyFile(keyPath);
+        QVERIFY(keyFile.open(QFile::WriteOnly));
+        QByteArray keys;
+        for(int i = 0; i < 16 * 2; i++)
+            keys += QByteArray(6, char(i + 1));
+        keyFile.write(keys);
+        keyFile.close();
+        QVERIFY(!workbench->importKeyFile(keyPath, "auto", &error));
+        QVERIFY(error.contains("ambiguous"));
+        QVERIFY2(workbench->importKeyFile(keyPath, "rrg", &error), qPrintable(error));
+        QCOMPARE(workbench->document().key(0, 'A').value, QString("010101010101"));
+        QCOMPARE(workbench->document().key(0, 'B').value, QString("111111111111"));
+
+        QDir::setCurrent(oldCwd);
+    }
 };
 
 // Full QApplication shutdown path: aboutToQuit fires while the window is still
@@ -1441,5 +1978,6 @@ int main(int argc, char** argv)
     GuiTests tests;
     return QTest::qExec(&tests, argc, argv);
 }
+
 
 #include "test_gui.moc"

@@ -2,6 +2,19 @@
 
 [English](../../CHANGELOG.md)  
 
+### V0.3.0（feature/mfc-workbench）
++ 新增 MFC 工作台：以單一文件模型保存資料、金鑰、有效性、修改與恢復狀態
++ 修正 RRG `key.bin` 互通：匯出時先全部 Key A、再全部 Key B；舊 GUI 的 A0 B0 排列改為明確的匯入／匯出選項
++ 未讀取的區塊不得默默存成 00：raw bin 會拒絕不完整資料，EML 以 `?` 表示未知，JSON 保留狀態與 SHA-256
++ 匯入 BIN／EML／JSON／金鑰檔前先完整驗證；截斷、格式錯誤會回報行號或大小，且不破壞目前文件
++ 新增離線 A/B 比較：相同／不同／未知／無法比較、容量與 UID 說明、Markdown／CSV 報告
++ 每個 sector 的 Key A／B 具明確狀態（未知／候選／已驗證／失敗）與來源（手動／匯入／字典／恢復／卡片）
++ 新增方法建議（字典、autopwn、nested、staticnested、hardnested、darkside、sen、isen）與缺少前提說明
++ 依 sector／block 欄位解析 client key 表，不依列序；分段、重複、超出範圍的列不會把 key 填錯 sector
++ 長任務不使用閒置 timeout：以完成標記、硬上限、取消語意與單一設備任務所有權管理
++ 新增受控寫入計畫：預設只寫資料區塊，Block 0／trailer 需明確勾選，寫入前預覽、寫後讀回驗證與失敗清單
++ 恢復得到的已驗證金鑰直接接到讀取、備份與比較，不需要手動重抄
+
 ### V0.2.10
 + 標記模式只接受本次 `remark:` 回覆；分段送出的 `pm3 --> ` 命令回顯不再視為完成邊界（寫入、模擬器、trace 讀寫、握手）
 + 為真正會印尾端提示字元的 client 保留明確的互動提示字元模式

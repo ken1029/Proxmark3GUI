@@ -64,6 +64,16 @@ MainWindow::MainWindow(QWidget *parent):
     // hide unused tabs
 //    ui->funcTab->removeTab(1);
     ui->funcTab->removeTab(3);
+    workbench = new MfcWorkbench(util, mifare, this);
+    ui->funcTab->insertTab(2, workbench, tr("MFC workbench"));
+    connect(workbench, &MfcWorkbench::abortClientRequested, this, &MainWindow::on_stopButton_clicked);
+    connect(workbench, &MfcWorkbench::documentTypeChanged, this, &MainWindow::onMfcDocumentTypeChanged);
+    connect(workbench, &MfcWorkbench::statusMessage, this, [this](const QString& message) {
+        statusBar()->showMessage(message, 10000);
+    });
+    connect(workbench, &MfcWorkbench::taskStateChanged, this, [this](bool running) {
+        setState(!running);
+    });
 
     portSearchTimer = new QTimer(this);
     portSearchTimer->setInterval(2000);
@@ -123,6 +133,7 @@ void MainWindow::loadConfig()
     QByteArray configData = configList.readAll();
     QJsonDocument configJson(QJsonDocument::fromJson(configData));
     mifare->setConfigMap(configJson.object()["mifare classic"].toObject().toVariantMap());
+    workbench->setConfigMap(configJson.object()["mifare classic"].toObject().toVariantMap());
     lf->setConfigMap(configJson.object()["lf"].toObject().toVariantMap());
     t55xxTab->setConfigMap(configJson.object()["t55xx"].toObject().toVariantMap());
 }
@@ -354,6 +365,8 @@ void MainWindow::onPM3StateChanged(bool st, const QString& info, quint64 attempt
         ui->PM3_connectButton->setEnabled(true);
     }
     pm3state = st;
+    if(workbench != nullptr)
+        workbench->setDeviceReady(st);
     setState(st);
     if(st == true)
     {
@@ -814,7 +827,16 @@ void MainWindow::on_MF_File_loadButton_clicked()
         {
             if(!mifare->data_loadDataFile(filename))
             {
-                QMessageBox::information(this, tr("Info"), tr("Failed to open") + "\n" + filename);
+                QMessageBox::information(this, tr("Info"), tr("Failed to open") + "\n" + filename
+                                         + "\n" + mifare->lastIoError());
+            }
+            else
+            {
+                MF_widgetReset();
+                mifare->data_syncWithDataWidget();
+                mifare->data_syncWithKeyWidget();
+                if(!mifare->lastIoWarning().isEmpty())
+                    QMessageBox::information(this, tr("Info"), mifare->lastIoWarning());
             }
         }
     }
@@ -825,9 +847,33 @@ void MainWindow::on_MF_File_loadButton_clicked()
         qDebug() << filename;
         if(filename != "")
         {
-            if(!mifare->data_loadKeyFile(filename))
+            bool loaded = mifare->data_loadKeyFile(filename);
+            if(!loaded && mifare->lastIoAmbiguous())
             {
-                QMessageBox::information(this, tr("Info"), tr("Failed to open") + "\n" + filename);
+                QMessageBox box(this);
+                box.setWindowTitle(tr("Key file layout"));
+                box.setText(tr("This binary key file has two possible layouts. Which one is it?"));
+                box.setInformativeText(tr("RRG/official client: all key A first, then all key B.\n"
+                                          "Legacy GUI: A0 B0 A1 B1 ..."));
+                QPushButton* rrg = box.addButton(tr("RRG key.bin"), QMessageBox::AcceptRole);
+                QPushButton* legacy = box.addButton(tr("Legacy GUI"), QMessageBox::AcceptRole);
+                box.addButton(QMessageBox::Cancel);
+                box.exec();
+                if(box.clickedButton() == rrg)
+                    loaded = mifare->data_loadKeyFile(filename, Mifare::KEYFILE_RRG);
+                else if(box.clickedButton() == legacy)
+                    loaded = mifare->data_loadKeyFile(filename, Mifare::KEYFILE_LEGACY);
+            }
+            if(!loaded)
+                QMessageBox::information(this, tr("Info"), tr("Failed to open") + "\n" + filename
+                                         + "\n" + mifare->lastIoError());
+            else
+            {
+                MF_widgetReset();
+                mifare->data_syncWithDataWidget();
+                mifare->data_syncWithKeyWidget();
+                if(!mifare->lastIoWarning().isEmpty())
+                    QMessageBox::information(this, tr("Info"), mifare->lastIoWarning());
             }
         }
     }
@@ -854,7 +900,12 @@ void MainWindow::on_MF_File_saveButton_clicked()
         {
             if(!mifare->data_saveDataFile(filename, selectedType == tr("Binary Data Files(*.bin *.dump)")))
             {
-                QMessageBox::information(this, tr("Info"), tr("Failed to save to") + "\n" + filename);
+                QMessageBox::information(this, tr("Info"), tr("Failed to save to") + "\n" + filename
+                                         + "\n" + mifare->lastIoError());
+            }
+            else if(!mifare->lastIoWarning().isEmpty())
+            {
+                QMessageBox::information(this, tr("Info"), mifare->lastIoWarning());
             }
         }
     }
@@ -867,7 +918,12 @@ void MainWindow::on_MF_File_saveButton_clicked()
         {
             if(!mifare->data_saveKeyFile(filename, selectedType == tr("Binary Key Files(*.bin *.dump)")))
             {
-                QMessageBox::information(this, tr("Info"), tr("Failed to save to") + "\n" + filename);
+                QMessageBox::information(this, tr("Info"), tr("Failed to save to") + "\n" + filename
+                                         + "\n" + mifare->lastIoError());
+            }
+            else if(!mifare->lastIoWarning().isEmpty())
+            {
+                QMessageBox::information(this, tr("Info"), mifare->lastIoWarning());
             }
         }
     }
@@ -1429,6 +1485,7 @@ void MainWindow::signalInit()
     connect(this, QOverload<const QString&, bool>::of(&MainWindow::setSerialListener), pm3, QOverload<const QString&, bool>::of(&PM3Process::setSerialListener));
 
     connect(util, &Util::write, pm3, &PM3Process::write);
+    connect(mifare, &Mifare::cardTypeChanged, this, &MainWindow::onMfcDocumentTypeChanged);
 
     connect(ui->MF_typeGroupBox, &QGroupBox::clicked, this, &MainWindow::on_GroupBox_clicked);
     connect(ui->MF_fileGroupBox, &QGroupBox::clicked, this, &MainWindow::on_GroupBox_clicked);
@@ -1479,7 +1536,12 @@ bool MainWindow::eventFilter(QObject * watched, QEvent * event) // drag support
                 QList<QUrl> urls = mime->urls();
                 if(urls.length() == 1)
                 {
-                    mifare->data_loadKeyFile(urls[0].toLocalFile());
+                    if(mifare->data_loadKeyFile(urls[0].toLocalFile()))
+                    {
+                        MF_widgetReset();
+                        mifare->data_syncWithDataWidget();
+                        mifare->data_syncWithKeyWidget();
+                    }
                     return true;
                 }
             }
@@ -1492,7 +1554,12 @@ bool MainWindow::eventFilter(QObject * watched, QEvent * event) // drag support
                 QList<QUrl> urls = mime->urls();
                 if(urls.length() == 1)
                 {
-                    mifare->data_loadDataFile(urls[0].toLocalFile());
+                    if(mifare->data_loadDataFile(urls[0].toLocalFile()))
+                    {
+                        MF_widgetReset();
+                        mifare->data_syncWithDataWidget();
+                        mifare->data_syncWithKeyWidget();
+                    }
                     return true;
                 }
             }
@@ -1546,6 +1613,7 @@ void MainWindow::applyCapabilities()
                 dock->setEnabled(enabled);
     };
     applyPage(ui->mifareTab, mf);
+    applyPage(workbench, mf);
     applyPage(ui->lfTab, lf);
     applyPage(this->t55xxTab, lf);
 
@@ -1554,7 +1622,7 @@ void MainWindow::applyCapabilities()
     const QString sniffReason = capabilities.has("hfsniff") ? mfReason : capabilities.reason("HFSNIFF");
 
     QList<QWidget*> mfWidgets = {ui->MF_attackGroupBox, ui->MF_normalGroupBox, ui->MF_UIDGroupBox,
-                                 ui->MF_simGroupBox, ui->MF_sniffGroupBox, ui->mifareTab
+                                 ui->MF_simGroupBox, ui->MF_sniffGroupBox, ui->mifareTab, workbench
                                 };
     for(QWidget* widget : mfWidgets)
         widget->setToolTip(mf ? QString() : mfReason);
@@ -1636,6 +1704,21 @@ void MainWindow::onPM3VersionInfo(const QString& clientVersion, const QString& f
             qDebug() << "capability manifest/firmware mismatch" << capabilities.firmwareVersion() << firmwareVersion;
         }
     }
+}
+
+void MainWindow::onMfcDocumentTypeChanged(int type)
+{
+    if(MFCardTypeBtnGroup != nullptr)
+    {
+        MFCardTypeBtnGroup->blockSignals(true);
+        if(QAbstractButton* button = MFCardTypeBtnGroup->button(type))
+            button->setChecked(true);
+        MFCardTypeBtnGroup->blockSignals(false);
+    }
+    mifare->setCardType(type);
+    MF_widgetReset();
+    mifare->data_syncWithDataWidget();
+    mifare->data_syncWithKeyWidget();
 }
 
 void MainWindow::on_GroupBox_clicked(bool checked)

@@ -93,6 +93,75 @@ Mifare::Mifare(Ui::MainWindow *ui, Util *addr, QWidget *parent): QObject(parent)
     keyPattern = new QRegularExpression("\\|\\s*\\d{3}\\s*\\|\\s*.+?\\s*\\|\\s*.+?\\s*\\|");
 }
 
+
+static int mfcTypeToInt(Mfc::CardType type)
+{
+    switch(type)
+    {
+    case Mfc::CardType::Mini:
+        return 0;
+    case Mfc::CardType::M1K:
+        return 1;
+    case Mfc::CardType::M2K:
+        return 2;
+    case Mfc::CardType::M4K:
+        return 4;
+    }
+    return 1;
+}
+
+static Mfc::CardType intToMfcType(int type)
+{
+    switch(type)
+    {
+    case 0:
+        return Mfc::CardType::Mini;
+    case 2:
+        return Mfc::CardType::M2K;
+    case 4:
+        return Mfc::CardType::M4K;
+    default:
+        return Mfc::CardType::M1K;
+    }
+}
+
+void Mifare::applyDocument(const Mfc::Document& document)
+{
+    const int previousType = cardType.type;
+    const Mfc::CardType mfcType = document.cardType();
+    switch(mfcType)
+    {
+    case Mfc::CardType::Mini:
+        cardType = card_mini;
+        break;
+    case Mfc::CardType::M2K:
+        cardType = card_2k;
+        break;
+    case Mfc::CardType::M4K:
+        cardType = card_4k;
+        break;
+    default:
+        cardType = card_1k;
+        break;
+    }
+    data_clearKey(true);
+    data_clearData(true);
+    for(int i = 0; i < cardType.block_size; i++)
+    {
+        const QString hex = document.blockHex(i);
+        dataList->replace(i, hex.count(QLatin1Char('?')) == 32 ? QString() : hex);
+    }
+    for(int s = 0; s < cardType.sector_size; s++)
+    {
+        const Mfc::KeyEntry& a = document.key(s, 'A');
+        const Mfc::KeyEntry& b = document.key(s, 'B');
+        keyAList->replace(s, a.hasValue() ? a.value : QString());
+        keyBList->replace(s, b.hasValue() ? b.value : QString());
+    }
+    if(previousType != cardType.type)
+        emit cardTypeChanged(cardType.type);
+}
+
 void Mifare::setConfigMap(const QVariantMap& configMap)
 {
     this->configMap = configMap;
@@ -1071,86 +1140,68 @@ void Mifare::setCardType(int type)
 
 bool Mifare::data_loadDataFile(const QString& filename)
 {
-    QFile file(filename, this);
-    if(file.open(QIODevice::ReadOnly))
+    lastErrorText.clear();
+    lastWarningText.clear();
+    lastAmbiguous = false;
+
+    Mfc::Document document;
+    Mfc::IoResult result = Mfc::Document::loadDataFile(filename, "auto", &document);
+    if(!result.ok)
     {
-        QByteArray buff;
-        buff = file.read(10000);
-        bool isBin = false;
-        for(int i = 0; i < cardType.block_size * 16; i++)  // Detect the file type
-        {
-            //                qDebug() << (unsigned char)buff[i];
-            if(!((buff[i] >= 'A' && buff[i] <= 'F') || (buff[i] >= 'a' && buff[i] <= 'f') || (buff[i] >= '0' && buff[i] <= '9') || buff[i] == '\n' || buff[i] == '\r'))
-            {
-                isBin = true;
-                break;
-            }
-        }
-        if(isBin)
-        {
-            if(file.size() < cardType.block_size * 16)
-                return false;
-            for(int i = 0; i < cardType.block_size; i++)
-            {
-                QString tmp = bin2text(buff, i, 16);
-                dataList->replace(i, tmp.toUpper());
-            }
-        }
-        else
-        {
-            QString tmp = buff.left(cardType.block_size * 34);
-            QStringList tmpList = tmp.split("\n");
-            for(int i = 0; i < cardType.block_size; i++)
-            {
-                dataList->replace(i, tmpList[i].toUpper());
-                qDebug() << tmpList[i];
-            }
-        }
-        file.close();
-        data_syncWithDataWidget();
-        return true;
-    }
-    else
-    {
+        lastErrorText = result.error;
         return false;
     }
+    applyDocument(document);
+    lastWarningText = result.warning;
+    return true;
 }
 
-bool Mifare::data_loadKeyFile(const QString& filename)
+bool Mifare::data_loadKeyFile(const QString& filename, KeyFileLayout layout)
 {
-    QFile file(filename, this);
-    if(file.open(QIODevice::ReadOnly))
+    lastErrorText.clear();
+    lastWarningText.clear();
+    lastAmbiguous = false;
+
+    QString layoutName;
+    switch(layout)
     {
-        QByteArray buff;
-        buff = file.read(10000);
-        bool isKey = file.size() <= cardType.sector_size * 14;
-        if(isKey)
-        {
-            for(int i = 0; i < cardType.sector_size; i++)
-            {
-                QString tmp = bin2text(buff, i, 12);
-                keyAList->replace(i, tmp.left(12).toUpper());
-                keyBList->replace(i, tmp.right(12).toUpper());
-            }
-        }
-        else
-        {
-            for(int i = 0; i < cardType.sector_size; i++)
-            {
-                int blk = getTrailerBlockId(i);
-                QString tmp = bin2text(buff, blk, 16);
-                keyAList->replace(i, tmp.left(12).toUpper());
-                keyBList->replace(i, tmp.right(12).toUpper());
-            }
-        }
-        file.close();
-        data_syncWithKeyWidget();
-        return true;
+    case KEYFILE_RRG:
+        layoutName = "rrg";
+        break;
+    case KEYFILE_LEGACY:
+        layoutName = "legacy";
+        break;
+    case KEYFILE_TEXT:
+        layoutName = "text";
+        break;
+    default:
+        layoutName = "auto";
+        break;
     }
-    else
+
+    Mfc::Document document;
+    Mfc::IoResult result = Mfc::Document::loadKeyFile(filename, layoutName, &document);
+    if(!result.ok)
     {
+        lastErrorText = result.error;
+        lastAmbiguous = result.ambiguousLayout;
         return false;
     }
+
+    // A key file must not wipe a data dump that is already in the editor.
+    const int previousType = cardType.type;
+    if(mfcTypeToInt(document.cardType()) != previousType)
+    {
+        setCardType(mfcTypeToInt(document.cardType()));
+        emit cardTypeChanged(cardType.type);
+    }
+    for(int s = 0; s < cardType.sector_size; s++)
+    {
+        keyAList->replace(s, document.key(s, 'A').value);
+        keyBList->replace(s, document.key(s, 'B').value);
+    }
+    lastWarningText = result.warning;
+    return true;
 }
 
 QString Mifare::bin2text(const QByteArray& buff, int i, int length)
@@ -1173,98 +1224,66 @@ QString Mifare::bin2text(const QByteArray& buff, int i, int length)
 
 bool Mifare::data_saveDataFile(const QString& filename, bool isBin)
 {
-    QFile file(filename, this);
-    if(file.open(QIODevice::WriteOnly))
+    lastErrorText.clear();
+    lastWarningText.clear();
+    lastAmbiguous = false;
+
+    Mfc::Document document;
+    document.setCardType(intToMfcType(cardType.type));
+    document.uid = data_getUID();
+    for(int i = 0; i < cardType.block_size; i++)
     {
-        QByteArray buff;
-        QChar tmp;
-        if(isBin)
+        const QString hex = dataList->at(i).trimmed().toUpper();
+        if(hex.isEmpty())
+            continue;
+        if(!document.setBlock(i, hex, Mfc::BlockState::Read))
         {
-            for(int i = 0; i < cardType.block_size; i++)
-            {
-                for(int j = 0; j < 16; j++)
-                {
-                    unsigned char Byt[2] = {0x0, 0x0};
-                    for(int k = 0; k < 2; k++)
-                    {
-                        tmp = dataList->at(i).at(j * 2 + k).toUpper();
-                        if(tmp >= '0' && tmp <= '9')
-                            Byt[k] = tmp.toLatin1() - '0';
-                        else if(tmp >= 'A' && tmp <= 'F')
-                            Byt[k] = tmp.toLatin1() - 'A' + 10;
-                    }
-                    buff += (Byt[0] << 4) | Byt[1];
-                }
-            }
+            lastErrorText = tr("Block %1 is not 32 hex symbols").arg(i);
+            return false;
         }
-        else
-        {
-            for(int i = 0; i < cardType.block_size; i++)
-            {
-                buff += dataList->at(i);
-                buff += "\n";
-            }
-        }
-        bool ret = file.write(buff) != -1;
-        file.close();
-        return ret;
     }
-    else
+    Mfc::IoResult result = document.saveDataFile(filename, isBin ? "bin" : "eml");
+    if(!result.ok)
     {
+        lastErrorText = result.error;
         return false;
     }
+    lastWarningText = result.warning;
+    return true;
 }
 
-bool Mifare::data_saveKeyFile(const QString& filename, bool isBin)
+bool Mifare::data_saveKeyFile(const QString& filename, bool isBin, KeyFileLayout layout)
 {
-    QFile file(filename, this);
-    if(file.open(QIODevice::WriteOnly))
+    lastErrorText.clear();
+    lastWarningText.clear();
+    lastAmbiguous = false;
+
+    Mfc::Document document;
+    document.setCardType(intToMfcType(cardType.type));
+    for(int s = 0; s < cardType.sector_size; s++)
     {
-        QByteArray buff;
-        QChar tmp;
-        if(isBin)
-        {
-            for(int i = 0; i < cardType.sector_size; i++)
-            {
-                for(int j = 0; j < 6; j++)
-                {
-                    unsigned char Byt[2] = {0x0, 0x0};
-                    for(int k = 0; k < 2; k++)
-                    {
-                        tmp = keyAList->at(i).at(j * 2 + k).toUpper();
-                        if(tmp >= '0' && tmp <= '9')
-                            Byt[k] = tmp.toLatin1() - '0';
-                        else if(tmp >= 'A' && tmp <= 'F')
-                            Byt[k] = tmp.toLatin1() - 'A' + 10;
-                    }
-                    buff += (Byt[0] << 4) | Byt[1];
-                }
-                for(int j = 0; j < 6; j++)
-                {
-                    unsigned char Byt[2] = {0x0, 0x0};
-                    for(int k = 0; k < 2; k++)
-                    {
-                        tmp = keyBList->at(i).at(j * 2 + k).toUpper();
-                        if(tmp >= '0' && tmp <= '9')
-                            Byt[k] = tmp.toLatin1() - '0';
-                        else if(tmp >= 'A' && tmp <= 'F')
-                            Byt[k] = tmp.toLatin1() - 'A' + 10;
-                    }
-                    buff += (Byt[0] << 4) | Byt[1];
-                }
-            }
-        }
-        else
-        {
-        }
-        bool ret = file.write(buff) != -1;
-        file.close();
-        return ret;
+        if(data_isKeyValid(keyAList->at(s)))
+            document.setKey(s, 'A', keyAList->at(s), Mfc::KeyState::Pending, Mfc::KeySource::Manual);
+        if(data_isKeyValid(keyBList->at(s)))
+            document.setKey(s, 'B', keyBList->at(s), Mfc::KeyState::Pending, Mfc::KeySource::Manual);
     }
+
+    QString layoutName;
+    if(!isBin)
+        layoutName = "text";
+    else if(layout == KEYFILE_LEGACY)
+        layoutName = "legacy";
     else
+        layoutName = "rrg";
+
+    Mfc::IoResult result = document.saveKeyFile(filename, layoutName, true);
+    if(!result.ok)
     {
+        lastErrorText = result.error;
         return false;
     }
+    lastWarningText = result.warning;
+    return true;
 }
 
 void Mifare::data_key2Data()
@@ -1317,10 +1336,27 @@ void Mifare::data_setData(int block, const QString& data)
 
 void Mifare::data_setKey(int sector, KeyType keyType, const QString& key)
 {
+    if(sector < 0 || sector >= keyAList->size())
+        return;
     if(keyType == KEY_A)
         keyAList->replace(sector, key);
     else
         keyBList->replace(sector, key);
+}
+
+QString Mifare::data_getData(int block) const
+{
+    if(block < 0 || block >= dataList->size())
+        return QString();
+    return dataList->at(block);
+}
+
+QString Mifare::data_getKey(int sector, KeyType keyType) const
+{
+    const QStringList* list = (keyType == KEY_A) ? keyAList : keyBList;
+    if(sector < 0 || sector >= list->size())
+        return QString();
+    return list->at(sector);
 }
 
 void Mifare::data_fillKeys()

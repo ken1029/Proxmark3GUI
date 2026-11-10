@@ -47,7 +47,22 @@
             "key A index": 2,
             "key B index": 4
         },
-        "info": {
+        "autopwn": {
+  "cmd": "hf mf autopwn --<card type>",
+  "card type": {
+   "mini": "mini",
+   "1k": "1k",
+   "2k": "2k",
+   "4k": "4k"
+  }
+ },
+ "sen": {
+  "cmd": "hf mf sen"
+ },
+ "isen": {
+  "cmd": "hf mf isen"
+ },
+ "info": {
             "cmd": "hf 14a info -nsv",
             "basic cmd": "hf 14a info"
         },

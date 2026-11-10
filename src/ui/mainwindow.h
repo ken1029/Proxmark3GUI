@@ -34,6 +34,7 @@
 #include "module/mifare.h"
 #include "module/lf.h"
 #include "module/t55xxtab.h"
+#include "ui/mfcworkbench.h"
 #include "common/util.h"
 #include "ui/mf_trailerdecoderdialog.h"
 
@@ -66,6 +67,7 @@ public slots:
     void onPM3ErrorOccurred(QProcess::ProcessError error);
     void onPM3HWConnectFailed(const QString& reason, quint64 attempt);
     void onPM3VersionInfo(const QString& clientVersion, const QString& firmwareVersion, const QString& target, bool mismatch, bool clientQtPlot, quint64 attempt);
+    void onMfcDocumentTypeChanged(int type);
 private slots:
 
     void on_PM3_connectButton_clicked();
@@ -261,6 +263,7 @@ private:
     QDir* clientWorkingDir;
 
     T55xxTab* t55xxTab;
+    MfcWorkbench* workbench = nullptr;
     Mifare* mifare;
     LF* lf;
     Util* util;

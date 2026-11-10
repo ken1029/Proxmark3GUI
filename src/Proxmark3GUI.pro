@@ -24,11 +24,14 @@ SOURCES += \
     common/util.cpp \
     module/lf.cpp \
     module/mifare.cpp \
+    module/mfcdocument.cpp \
+    module/mfckeyrecovery.cpp \
     module/t55xxtab.cpp \
     ui/mf_trailerdecoderdialog.cpp \
     ui/mf_sim_simdialog.cpp \
     ui/mf_uid_parameterdialog.cpp \
     ui/mainwindow.cpp \
+    ui/mfcworkbench.cpp \
     ui/mf_attack_hardnesteddialog.cpp \
 
 HEADERS += \
@@ -39,11 +42,14 @@ HEADERS += \
     common/util.h \
     module/lf.h \
     module/mifare.h \
+    module/mfcdocument.h \
+    module/mfckeyrecovery.h \
     module/t55xxtab.h \
     ui/mf_trailerdecoderdialog.h \
     ui/mf_sim_simdialog.h \
     ui/mf_uid_parameterdialog.h \
     ui/mainwindow.h \
+    ui/mfcworkbench.h \
     ui/mf_attack_hardnesteddialog.h \
 
 FORMS += \
@@ -64,7 +70,7 @@ qnx: target.path = /tmp/$${TARGET}/bin
 else: unix:!android: target.path = /opt/$${TARGET}/bin
 !isEmpty(target.path): INSTALLS += target
 
-VERSION = 0.2.10
+VERSION = 0.3.0
 QMAKE_TARGET_PRODUCT = "Proxmark3GUI"
 QMAKE_TARGET_DESCRIPTION = "A cross-platform GUI for Proxmark3 client"
 QMAKE_TARGET_COMPANY = "wh201906"

@@ -2,6 +2,7 @@
 #define MIFARE_H
 
 #include "common/util.h"
+#include "module/mfcdocument.h"
 #include "ui_mainwindow.h"
 #include "ui/mf_attack_hardnesteddialog.h"
 #include "ui/mf_uid_parameterdialog.h"
@@ -100,15 +101,29 @@ public:
     void wipeC();
     void setParameterC();
 
+    enum KeyFileLayout
+    {
+        KEYFILE_AUTO,
+        KEYFILE_RRG,    // official client key.bin: A0 A1 ... B0 B1 ...
+        KEYFILE_LEGACY, // old GUI key.bin: A0 B0 A1 B1 ...
+        KEYFILE_TEXT,
+    };
+
+    // These only update the model; the caller resets and syncs the widgets.
     bool data_loadDataFile(const QString& filename);
-    bool data_loadKeyFile(const QString& filename);
+    bool data_loadKeyFile(const QString& filename, KeyFileLayout layout = KEYFILE_AUTO);
     bool data_saveDataFile(const QString& filename, bool isBin);
-    bool data_saveKeyFile(const QString& filename, bool isBin);
+    bool data_saveKeyFile(const QString& filename, bool isBin, KeyFileLayout layout = KEYFILE_RRG);
+    QString lastIoError() const { return lastErrorText; }
+    QString lastIoWarning() const { return lastWarningText; }
+    bool lastIoAmbiguous() const { return lastAmbiguous; }
     void data_key2Data();
     void data_data2Key();
 
     void data_setData(int block, const QString& data);
     void data_setKey(int sector, KeyType keyType, const QString& key);
+    QString data_getData(int block) const;
+    QString data_getKey(int sector, KeyType keyType) const;
     void lockC();
     void wipeE();
     void simulate();
@@ -126,6 +141,7 @@ public:
     QString getTraceSavePath();
 public slots:
 signals:
+    void cardTypeChanged(int type);
 
 private:
     QWidget* parent;
@@ -134,6 +150,10 @@ private:
 
     QVariantMap configMap;
     TraceSource traceSource;
+    QString lastErrorText;
+    QString lastWarningText;
+    bool lastAmbiguous = false;
+    void applyDocument(const Mfc::Document& document);
 
     QStringList* keyAList;
     QStringList* keyBList;

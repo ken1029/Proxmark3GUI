@@ -32,8 +32,11 @@ SOURCES += \
     ../src/ui/mf_sim_simdialog.cpp \
     ../src/module/lf.cpp \
     ../src/module/mifare.cpp \
+    ../src/module/mfcdocument.cpp \
+    ../src/module/mfckeyrecovery.cpp \
     ../src/module/t55xxtab.cpp \
     ../src/ui/mainwindow.cpp \
+    ../src/ui/mfcworkbench.cpp \
     ../src/ui/mf_attack_hardnesteddialog.cpp \
     ../src/ui/mf_trailerdecoderdialog.cpp \
     ../src/ui/mf_uid_parameterdialog.cpp
@@ -47,8 +50,11 @@ HEADERS += \
     ../src/ui/mf_sim_simdialog.h \
     ../src/module/lf.h \
     ../src/module/mifare.h \
+    ../src/module/mfcdocument.h \
+    ../src/module/mfckeyrecovery.h \
     ../src/module/t55xxtab.h \
     ../src/ui/mainwindow.h \
+    ../src/ui/mfcworkbench.h \
     ../src/ui/mf_attack_hardnesteddialog.h \
     ../src/ui/mf_trailerdecoderdialog.h \
     ../src/ui/mf_uid_parameterdialog.h
