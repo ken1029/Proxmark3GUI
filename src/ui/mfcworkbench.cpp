@@ -1362,6 +1362,9 @@ void MfcWorkbench::readUnknownBlocks()
         if(doc.spec().isTrailerBlock(block))
         {
             doc.setBlock(block, trailerReadback(block, keyType, hex), Mfc::BlockState::Read, targetSession);
+            if(!doc.blockComplete(block))
+                logLine(tr("Block %1: trailer is masked by its access conditions; "
+                           "verify both keys to complete it").arg(block));
         }
         else
         {
@@ -1405,9 +1408,24 @@ QString MfcWorkbench::trailerReadback(int block, char authType, const QString& c
     if(!Mfc::TrailerAcl::valid(acl))
         return result + QString(20, QLatin1Char('?'));
     result += acl;
-    const bool keyBReadable = Mfc::TrailerAcl::keyBReadable(acl)
-                              && Mfc::TrailerAcl::aclReadable(acl, authType);
-    result += keyBReadable ? read.mid(20, 12) : QString(12, QLatin1Char('?'));
+    const bool keyBReadable = Mfc::TrailerAcl::keyBReadable(acl);
+    const Mfc::KeyEntry& keyB = doc.key(sector, 'B');
+    if(keyBReadable && Mfc::TrailerAcl::aclReadable(acl, authType))
+    {
+        // The card returned Key B as data.
+        result += read.mid(20, 12);
+    }
+    else if(keyB.verifiedIn(targetSession) && keyB.hasValue())
+    {
+        // The access conditions mask Key B (or this authentication key may not
+        // read it).  The verified key store still holds the value; using it is
+        // what makes a trailer complete instead of showing 12 unknown bytes.
+        result += keyB.value;
+    }
+    else
+    {
+        result += QString(12, QLatin1Char('?'));
+    }
     return result;
 }
 

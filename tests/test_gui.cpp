@@ -2133,6 +2133,46 @@ private slots:
         QVERIFY(!Mfc::TrailerAcl::keyAWriteAllowed("????????????????", 'A'));
     }
 
+    // A trailer read masks Key A and, for access conditions 3..5, Key B.  The
+    // user already has the keys, so a masked trailer must be completed from the
+    // verified key store instead of leaving 12 '?' in every sector.
+    void trailerReadbackUsesVerifiedKeyB()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString oldCwd = QDir::currentPath();
+        QDir::setCurrent(dir.path());
+        QSettings settings("GUIsettings.ini", QSettings::IniFormat);
+        settings.setValue("language/name", "en_US");
+        settings.sync();
+
+        MainWindow window;
+        window.initUI();
+        MfcWorkbench* workbench = window.findChild<MfcWorkbench*>("mfcWorkbench");
+        QVERIFY(workbench != nullptr);
+        workbench->setDeviceReady(true);
+        const quint64 session = workbench->activeSession();
+        Mfc::Document& doc = workbench->document();
+        QVERIFY(doc.setKeyVerified(0, 'A', "FFFFFFFFFFFF", Mfc::KeySource::Manual, session));
+        QVERIFY(doc.setKeyVerified(0, 'B', "1234567890AB", Mfc::KeySource::Manual, session));
+
+        // Condition 3 (7F078800): Key B is not readable as data, so the card
+        // returns a masked value for the Key A and Key B fields.
+        const QString card = QStringLiteral("000000000000") + "7F078800" + QStringLiteral("000000000000");
+        QCOMPARE(workbench->trailerReadback(3, 'A', card),
+                 QStringLiteral("FFFFFFFFFFFF") + "7F078800" + QStringLiteral("1234567890AB"));
+        QVERIFY(doc.setBlock(3, workbench->trailerReadback(3, 'A', card),
+                             Mfc::BlockState::Read, session));
+        QVERIFY(doc.blockComplete(3));
+
+        // Without a verified Key B the masked bytes stay unknown (a real gap).
+        QVERIFY(doc.setKey(0, 'B', "1234567890AB", Mfc::KeyState::Pending, Mfc::KeySource::Manual));
+        QCOMPARE(workbench->trailerReadback(3, 'A', card),
+                 QStringLiteral("FFFFFFFFFFFF") + "7F078800" + QStringLiteral("????????????"));
+
+        QDir::setCurrent(oldCwd);
+    }
+
     // Verification evidence belongs to the RF session that produced it.
     void mfcSessionScopedEvidence()
     {

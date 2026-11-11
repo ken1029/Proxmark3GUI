@@ -2,6 +2,10 @@
 
 [中文](doc/CHANGELOG/CHANGELOG_zh_CN.md)  
 
+### V0.3.5 (feature/mfc-workbench, trailer Key B fix)
++ Complete masked trailer blocks from the verified key store: a MIFARE Classic trailer read masks Key B for access conditions 3..5, so the workbench stored 12 `?` for it and every sector stayed "unknown" (16 unknown on a 1K card) even though all keys were already recovered/verified. `trailerReadback()` now fills the masked Key B from the verified key B of that sector, exactly like Key A, and logs why a trailer is still incomplete when the key is genuinely unknown
++ `trailerReadbackUsesVerifiedKeyB()` pins both cases: verified key B completes the trailer; a pending/unverified key B keeps the bytes unknown
+
 ### V0.3.4 (feature/mfc-workbench, reconnect fix)
 + Restore the persistent client after a one-shot recovery run: methods that poll stdin stop the persistent client to free the serial port, and the GUI now reconnects it (with the same path/args and the normal handshake) once the run ends, instead of leaving the user on "Not Connected" and asking for Connect again. A run started while disconnected still stays disconnected; a manual Connect during the 200 ms port-release window wins
 + `oneShotRunReconnectsClient()` pins the reconnect

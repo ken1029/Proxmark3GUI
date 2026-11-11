@@ -2,6 +2,10 @@
 
 [English](../../CHANGELOG.md)  
 
+### V0.3.5（feature/mfc-workbench，trailer Key B 修正）
++ 被遮罩的 trailer 改由已驗證金鑰庫補齊：MIFARE Classic 讀取 trailer 時，access condition 3～5 會遮罩 Key B，舊版因此存下 12 個 `?`，每個 sector 都留一個未知區塊（1K 卡共 16 個），即使金鑰早已全部恢復／驗證。`trailerReadback()` 現在會用該 sector 已驗證的 Key B 補上，與 Key A 相同；金鑰真的未知時仍保留未知，並在日誌說明原因
++ 以 `trailerReadbackUsesVerifiedKeyB()` 固定兩種情況：已驗證 Key B 會補齊 trailer；待驗證／未驗證的 Key B 仍保持未知
+
 ### V0.3.4（feature/mfc-workbench，重新連線修正）
 + 一次性恢復任務結束後自動接回常駐 client：會輪詢 stdin 的方法必須先停掉常駐 client 才能取得序列埠，現在改由 GUI 在任務結束後以相同路徑／參數重新連線（照正常握手流程），不再停在「未連線」要求使用者再按一次連線。原本就未連線時不會自動連線；200 ms 等待序列埠釋放的期間若使用者手動按連線，以使用者為準
 + 以 `oneShotRunReconnectsClient()` 固定此行為

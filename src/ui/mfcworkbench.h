@@ -29,6 +29,7 @@ class Mifare;
 class MfcWorkbench : public QWidget
 {
     Q_OBJECT
+    friend class GuiTests;
 public:
     explicit MfcWorkbench(Util* util, Mifare* mifare, QWidget* parent = nullptr);
 
@@ -117,7 +118,8 @@ private:
     QString nonceText() const;
     bool chooseVerifiedKey(int sector, char* type, QString* key) const;
     // Trailer payload from a raw read: Key A from this session's verified key,
-    // access bytes and Key B only when the access conditions return them.
+    // access bytes, and Key B from the card when the access conditions return
+    // it, otherwise from the verified key store (the card masks it).
     QString trailerReadback(int block, char authType, const QString& cardHex) const;
     bool readBlockOnce(int block, char keyType, const QString& key, QString* hex, QString* error);
     bool verifyOneKey(int sector, char type, const QString& key);
