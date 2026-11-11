@@ -2,6 +2,10 @@
 
 [中文](doc/CHANGELOG/CHANGELOG_zh_CN.md)  
 
+### V0.3.2 (feature/mfc-workbench, parser fix)
++ Read the client key table for real: every row is prefixed with `[+] `, so the row pattern must tolerate the tag instead of anchoring on whitespace; recovery now reports the keys it recovered instead of "Method finished without a usable key"
++ Recognise `Static nonce....... 009080a2` as a static nonce
+
 ### V0.3.1 (feature/mfc-workbench, review fixes)
 + Write protection is enforced by one write plan: preview, manual row ticks, "retry failed only" and the command loop all re-check the include options, so Block 0 and trailers never reach the client unless they were explicitly allowed
 + Separate the source document from the card in the field: keys and blocks carry the RF session that produced them, a different UID is not adopted, and a reconnect requires a new identification before evidence is reused

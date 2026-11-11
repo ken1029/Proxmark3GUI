@@ -137,6 +137,9 @@ ParseResult parseOutput(const QString& cleanOutput, const Mfc::Spec& spec)
                                   QRegularExpression::CaseInsensitiveOption);
     QRegularExpression nonceStatic(QStringLiteral("Static\\s+nonce\\s*\\.*\\s*(?:yes|YES)"),
                                    QRegularExpression::CaseInsensitiveOption);
+    // "Static nonce....... 009080a2" - the client prints the nonce itself
+    QRegularExpression nonceStaticValue(QStringLiteral("Static\\s+nonce\\s*\\.*\\s*[0-9A-Fa-f]{8,}"),
+                                        QRegularExpression::CaseInsensitiveOption);
     QRegularExpression nonceDetectedEnc(QStringLiteral("Static\\s+encrypted\\s+nonce\\s+detected"),
                                         QRegularExpression::CaseInsensitiveOption);
     QRegularExpression nonceDetected(QStringLiteral("Static\\s+nonce\\s+detected"),
@@ -148,14 +151,17 @@ ParseResult parseOutput(const QString& cleanOutput, const Mfc::Spec& spec)
         result.nonce = NonceType::StaticEncrypted;
     else if(nonceSuper.match(cleanOutput).hasMatch())
         result.nonce = NonceType::SuperStatic;
-    else if(nonceStatic.match(cleanOutput).hasMatch() || nonceDetected.match(cleanOutput).hasMatch())
+    else if(nonceStatic.match(cleanOutput).hasMatch() || nonceDetected.match(cleanOutput).hasMatch()
+            || nonceStaticValue.match(cleanOutput).hasMatch())
         result.nonce = NonceType::Static;
     else if(prng.match(cleanOutput).hasMatch())
         result.nonce = NonceType::Normal;
 
     // Sector | trailer block | key A | result | key B | result
     // The sector and block columns are authoritative; row order is not.
-    QRegularExpression row(QStringLiteral("^\\s*(\\d{1,3})\\s*\\|\\s*(\\d{1,3})\\s*\\|"
+    // The client prefixes every line with "[+] " (or "[=] ", "[-] "), so the
+    // prefix must be optional or no row ever matches.
+    QRegularExpression row(QStringLiteral("^[^\\d\\n]*(\\d{1,3})\\s*\\|\\s*(\\d{1,3})\\s*\\|"
                                           "\\s*([0-9A-Fa-f]{12}|-{3,})\\s*\\|\\s*([0-9A-Za-z*])\\s*\\|"
                                           "\\s*([0-9A-Fa-f]{12}|-{3,})\\s*\\|\\s*([0-9A-Za-z*])"),
                            QRegularExpression::MultilineOption);

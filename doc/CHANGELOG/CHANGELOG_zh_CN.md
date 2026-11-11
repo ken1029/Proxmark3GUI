@@ -2,6 +2,10 @@
 
 [English](../../CHANGELOG.md)  
 
+### V0.3.2（feature/mfc-workbench，解析修正）
++ 真正讀得懂 client 的金鑰表：每一列都有 `[+] ` 前綴，樣式必須容許標籤而不是只允許空白；恢復完成後會回報已取得的金鑰，不再顯示「方法結束，但沒有取得可用金鑰」
++ 認得 `Static nonce....... 009080a2` 這種由 client 印出 nonce 值的靜態 nonce 行
+
 ### V0.3.0（feature/mfc-workbench）
 + 新增 MFC 工作台：以單一文件模型保存資料、金鑰、有效性、修改與恢復狀態
 + 修正 RRG `key.bin` 互通：匯出時先全部 Key A、再全部 Key B；舊 GUI 的 A0 B0 排列改為明確的匯入／匯出選項

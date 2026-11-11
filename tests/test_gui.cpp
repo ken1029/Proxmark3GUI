@@ -1689,6 +1689,55 @@ private slots:
         QCOMPARE(MfcRecovery::detectStage("Found valid key [ FFFFFFFFFFFF ]"), QString("done"));
     }
 
+    // Real v4.23346 output: the client prefixes every table row with "[+] ",
+    // which the row pattern has to tolerate.
+    void mfcRecoveryStaticNestedTable()
+    {
+        const Mfc::Spec spec = Mfc::Spec::get(Mfc::CardType::M1K);
+        const QString output =
+            "[usb|script] pm3 --> hf mf staticnested --1k --blk 27 -a -k 9BA0707FD128\n"
+            "[#] Static nonce....... 009080a2\n"
+            "[+] Testing known keys. Sector count 16\n"
+            "[+] Time in check keys 1 seconds\n"
+            "[+] target block    0 key type A -- found valid key [ 3E632E271345 ]\n"
+            "[+] Target block    0 key type B\n"
+            "[!] No key found, next try...\n"
+            "[+] target block    0 key type B -- found valid key [ 40EF1BA62B93 ]\n"
+            "[+] time in static nested 20 seconds\n"
+            "[=] Trying to read key B...\n"
+            "[+] -----+-----+--------------+---+--------------+----\n"
+            "[+]  Sec | Blk | key A        |res| key B        |res\n"
+            "[+] -----+-----+--------------+---+--------------+----\n"
+            "[+]  000 | 003 | 3E632E271345 | 1 | 40EF1BA62B93 | 1 \n"
+            "[+]  001 | 007 | A747DD266F44 | 1 | 2A920A261244 | 1 \n"
+            "[+]  002 | 011 | 9DCE30B48D61 | 1 | 28EC08EA7B6C | 1 \n"
+            "[+]  003 | 015 | 2D7A10908F45 | 1 | 30AC08E92D24 | 1 \n"
+            "[+]  004 | 019 | 2E98643ACD57 | 1 | AFA5576F57D8 | 1 \n"
+            "[+]  005 | 023 | B1B17CC93BC4 | 1 | A7AC3DC8A218 | 1 \n"
+            "[+]  006 | 027 | 9BA0707FD128 | 1 | 64C847347877 | 1 \n"
+            "[+]  007 | 031 | BD396C5F146D | 1 | CFD4270E2C6E | 1 \n"
+            "[+]  008 | 035 | 030203EBD753 | 1 | 0D5A31E29487 | 1 \n"
+            "[+]  009 | 039 | 08306A62EB5A | 1 | 2297089323BF | 1 \n"
+            "[+]  010 | 043 | F67000B1A95A | 1 | 96525AA47438 | 1 \n"
+            "[+]  011 | 047 | A9B8AAA4E598 | 1 | 4AE5A8839DC7 | 1 \n"
+            "[+]  012 | 051 | E3E254925EAA | 1 | 4CE3B74D9093 | 1 \n"
+            "[+]  013 | 055 | 3E2726DD4BCE | 1 | FFCE0756664B | 1 \n"
+            "[+]  014 | 059 | 250B159BC7A5 | 1 | F84874D19782 | 1 \n"
+            "[+]  015 | 063 | 64F9FD4F4E93 | 1 | 64DFF3ECB19C | 1 \n"
+            "[+] -----+-----+--------------+---+--------------+----\n"
+            "[+] ( 0:Failed / 1:Success )\n";
+
+        const MfcRecovery::ParseResult parsed = MfcRecovery::parseOutput(output, spec);
+        QVERIFY(parsed.sawTable);
+        QVERIFY(parsed.sawCompletion);
+        QCOMPARE(parsed.nonce, MfcRecovery::NonceType::Static);
+        QCOMPARE(parsed.keys.size(), 32);
+        for(const MfcRecovery::Candidate& candidate : parsed.keys)
+            QVERIFY2(candidate.found,
+                     qPrintable(QString("sector %1 key %2 was not marked found")
+                                .arg(candidate.sector).arg(candidate.type)));
+    }
+
     void mfcRecoveryMerge()
     {
         Mfc::Document doc(Mfc::CardType::M1K);
