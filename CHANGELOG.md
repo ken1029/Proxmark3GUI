@@ -2,6 +2,11 @@
 
 [中文](doc/CHANGELOG/CHANGELOG_zh_CN.md)  
 
+### V0.3.3 (feature/mfc-workbench, one-shot output fix)
++ Keep capturing a running task's output when the channel is released: a one-shot recovery run frees the port by stopping the persistent client, and that stop cleared the capture flag, so `commandFinished()` received an empty string and every recovered key was reported as "Method finished without a usable key"
++ Read the methods that print one key instead of a table: `Brute force completed. Key found: XXXXXXXXXXXX` (hardnested), `Found valid key [ XXXXXXXXXXXX ]` (darkside, nested/staticnested per-block lines) and sen's `Reader material recovered sec NNN key A = XXXXXXXXXXXX` / `Key sec NNN key X = ...` / `Found initial key: sector N ...`. hardnested and darkside attribute the key to the command's target sector/key type; a lone key with no target is reported as a warning instead of being guessed into sector 0
++ The mock client now prints the real `[+] ` table prefix and a hardnested result, and `isolatedTaskSurvivesClientStop()`, `mfcRecoverySingleKeyOutput()` and `workbenchRunsHardnestedTask()` pin the invariants
+
 ### V0.3.2 (feature/mfc-workbench, parser fix)
 + Read the client key table for real: every row is prefixed with `[+] `, so the row pattern must tolerate the tag instead of anchoring on whitespace; recovery now reports the keys it recovered instead of "Method finished without a usable key"
 + Recognise `Static nonce....... 009080a2` as a static nonce

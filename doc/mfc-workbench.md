@@ -100,6 +100,12 @@ POSIX client 的 `kbd_enter_pressed()` 以 `getchar()` 排空 stdin，任何預�
 - 短命令（`rdbl`／`wrbl`／`hf 14a info`）仍走常駐 client；它們不輪詢 stdin，完成邊界是 `rem <token>` 或互動模式的最後提示。
 - 卡片移走、client 結束、斷線、逾時與使用者取消各有獨立狀態；輸出依 session 歸屬，失敗任務的後續輸出不會寫進下一個任務。
 
+### 4.1.1 輸出收集與「只印一把金鑰」（v0.3.3 修正）
+
+- 一次性任務啟動時會先停掉常駐 client 以釋放序列埠；那個「client 結束」事件會走到 `Util::setRunningState(false)` → `releaseChannel()`。**釋放通道不得清掉進行中任務的輸出收集旗標**，否則 `commandFinished()` 收到空字串，所有已取得的金鑰都會被當成「沒有可用金鑰」。`finishAsync()` 仍會在任務結束時收尾。
+- 不是每個方法都印表格：`hardnested` 只印 `Brute force completed. Key found: XXXXXXXXXXXX`，`darkside` 印 `Found valid key [ XXXXXXXXXXXX ]`，`nested`／`staticnested` 另有 `target block N key type X -- found valid key [ ... ]` 的行，`sen` 印 `Reader material recovered sec NNN key A = ...`／`Key sec NNN key X = ...`／`Found initial key: sector N ...`。這些都由 `MfcRecovery::parseOutput()` 解析。
+- `hardnested`／`darkside` 的輸出不帶 sector，改由命令的目標（`--tblk`／`--blk`／`-b`）決定；沒有目標可歸屬時只回報警告，不會猜成 sector 0。block 會透過 trailer 表反查 sector，因此 4K 卡（32 個 4-block sector ＋ 8 個 16-block sector）不會錯位。
+
 ### 4.2 全域通道所有權
 
 `Util::isChannelOwned()` 是唯一的「client 可能還在忙」狀態：

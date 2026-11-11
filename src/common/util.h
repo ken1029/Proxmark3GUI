@@ -138,6 +138,9 @@ public:
     // the last command.  Every entry point (workbench, Classic pages, Raw)
     // must refuse to send until this is false again.
     bool isChannelOwned() const { return channelOwned; }
+    // True while a task's output is being accumulated for commandFinished().
+    // Releasing the channel must not clear this while the task is active.
+    bool isCapturingOutput() const { return isRequiringOutput; }
     // Session id of the running/last command; 0 when the channel is free.
     // Late output can be attributed to the task that emitted it.
     quint64 commandSession() const { return channelOwned ? asyncSessionId : 0; }

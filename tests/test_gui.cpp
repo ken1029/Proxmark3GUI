@@ -1738,6 +1738,113 @@ private slots:
                                 .arg(candidate.sector).arg(candidate.type)));
     }
 
+    // A one-shot recovery run frees the port by stopping the persistent client.
+    // That stop reaches Util as setRunningState(false) -> releaseChannel() while
+    // the task is already active; the task must keep capturing its output, or
+    // commandFinished() carries an empty string and every recovered key is
+    // reported as "Method finished without a usable key".
+    void isolatedTaskSurvivesClientStop()
+    {
+        Util util;
+        util.setRunningState(true);
+        QSignalSpy finished(&util, &Util::commandFinished);
+        QObject::connect(&util, &Util::isolatedRunRequested, &util,
+                         [&util](const QString&, const QString&) {
+            QTimer::singleShot(0, &util, [&util]() {
+                // The GUI disconnects the persistent client before the one-shot
+                // client starts: the port is released mid-task.
+                util.setRunningState(false);
+                QVERIFY(!util.isChannelOwned());
+                util.processOutput("[+]  Sec | Blk | key A        |res| key B        |res\n");
+                util.processOutput("[+]  000 | 003 | 3E632E271345 | 1 | 40EF1BA62B93 | 1 \n");
+                util.processOutput("[+]  001 | 007 | A747DD266F44 | 1 | 2A920A261244 | 1 \n");
+                util.isolatedFinished(Util::EXEC_OK);
+            });
+        });
+
+        Util::AsyncCommand command;
+        command.cmd = "hf mf staticnested --1k --blk 27 -a -k 9BA0707FD128";
+        command.isolated = true;
+        command.hardTimeoutMs = 5000;
+        QVERIFY(util.startCommand(command));
+        QTRY_COMPARE(finished.count(), 1);
+
+        const Util::ExecResult result = finished.first().at(0).value<Util::ExecResult>();
+        QCOMPARE(result.status, Util::EXEC_OK);
+        QVERIFY(result.output.contains("3E632E271345"));
+        const MfcRecovery::ParseResult parsed =
+            MfcRecovery::parseOutput(result.output, Mfc::Spec::get(Mfc::CardType::M1K));
+        QCOMPARE(parsed.keys.size(), 4);
+        QVERIFY(!util.isChannelOwned());
+        QVERIFY(!util.isCapturingOutput());
+    }
+
+    // hardnested/darkside recover one key and print it without a table; sen
+    // prints its keys line by line.  None of them may end up as "no usable key".
+    void mfcRecoverySingleKeyOutput()
+    {
+        const Mfc::Spec spec = Mfc::Spec::get(Mfc::CardType::M1K);
+
+        // Real v4.23346 hardnested output: target block 23 = sector 5 key A.
+        const QString hardnested =
+            "[=] Target block no  23 target key type: A known target key: 000000000000 (not set)\n"
+            "[=]  Time    | #nonces | Activity                                                | #states                   | Estimated\n"
+            "[=]       29 |    2657 | Brute force completed. Key found:          B1B17CC93BC4 |                         0 |            0s\n"
+            "[=] ---------+---------+---------------------------------------------------------+---------------------------+---------------\n";
+        MfcRecovery::Target target;
+        target.sector = 5;
+        target.type = 'A';
+        MfcRecovery::ParseResult parsed = MfcRecovery::parseOutput(hardnested, spec, target);
+        QCOMPARE(parsed.keys.size(), 1);
+        QCOMPARE(parsed.keys.first().sector, 5);
+        QCOMPARE(parsed.keys.first().type, 'A');
+        QCOMPARE(parsed.keys.first().key, QString("B1B17CC93BC4"));
+        QVERIFY(parsed.keys.first().found);
+
+        // No target, no attribution: warn instead of guessing a sector.
+        const MfcRecovery::ParseResult orphan = MfcRecovery::parseOutput(hardnested, spec);
+        QVERIFY(orphan.keys.isEmpty());
+        QCOMPARE(orphan.warnings.size(), 1);
+
+        // darkside prints the same "Found valid key" line for block 0 key A.
+        MfcRecovery::Target block0;
+        block0.sector = 0;
+        block0.type = 'A';
+        const MfcRecovery::ParseResult darkside = MfcRecovery::parseOutput(
+            "[+] Found valid key [ 3E632E271345 ]\n[+] Time in darkside 12 seconds\n", spec, block0);
+        QCOMPARE(darkside.keys.size(), 1);
+        QCOMPARE(darkside.keys.first().sector, 0);
+        QCOMPARE(darkside.keys.first().key, QString("3E632E271345"));
+
+        // nested/staticnested also name the block and key type per line.
+        const MfcRecovery::ParseResult blocks = MfcRecovery::parseOutput(
+            "[+] target block    0 key type A -- found valid key [ 3E632E271345 ]\n"
+            "[+] target block   24 key type B -- found valid key [ 64C847347877 ]\n", spec);
+        QCOMPARE(blocks.keys.size(), 2);
+        QCOMPARE(blocks.keys.at(0).sector, 0);
+        QCOMPARE(blocks.keys.at(1).sector, 6);
+        QCOMPARE(blocks.keys.at(1).type, 'B');
+
+        // A block that starts no sector of this card cannot name a key.
+        const MfcRecovery::ParseResult notFirst = MfcRecovery::parseOutput(
+            "[+] target block   25 key type A -- found valid key [ 3E632E271345 ]\n", spec);
+        QVERIFY(notFirst.keys.isEmpty());
+        QCOMPARE(notFirst.warnings.size(), 1);
+
+        // sen reports sector and key type in both of its result lines.
+        const MfcRecovery::ParseResult sen = MfcRecovery::parseOutput(
+            "[+] Reader material recovered sec 006 key A = 9BA0707FD128\n"
+            "[+] Found initial key: sector 10 block 40 key B = 96525AA47438\n"
+            "[=]  0.3 |      12 | Key sec 013 key B = FFCE0756664B |  20/32 keys | 0s \n", spec);
+        QCOMPARE(sen.keys.size(), 3);
+        QCOMPARE(sen.keys.at(0).sector, 6);
+        QCOMPARE(sen.keys.at(0).type, 'A');
+        QCOMPARE(sen.keys.at(1).sector, 10);
+        QCOMPARE(sen.keys.at(1).type, 'B');
+        QCOMPARE(sen.keys.at(2).sector, 13);
+        QCOMPARE(sen.keys.at(2).key, QString("FFCE0756664B"));
+    }
+
     void mfcRecoveryMerge()
     {
         Mfc::Document doc(Mfc::CardType::M1K);
@@ -2160,6 +2267,9 @@ private slots:
         QCOMPARE(isolatedSpy.count(), 1);
         QVERIFY(writeSpy.isEmpty());
         QVERIFY(workbench->isTaskActive());
+        // The GUI stops the persistent client to free the port; that stop reaches
+        // Util while the one-shot client is already running.
+        util->setRunningState(false);
 
         QElapsedTimer timer;
         timer.start();
@@ -2171,6 +2281,71 @@ private slots:
         QCOMPARE(workbench->document().key(1, 'B').state, Mfc::KeyState::Unknown);
         QCOMPARE(workbench->document().key(0, 'A').verifiedSession, session);
         QVERIFY(!util->isChannelOwned());
+        util->setRunningState(false);
+        QDir::setCurrent(oldCwd);
+    }
+
+    // hardnested prints one recovered key for --tblk/--ta; the workbench has to
+    // attribute it to the target sector instead of reporting "no usable key".
+    void workbenchRunsHardnestedTask()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString oldCwd = QDir::currentPath();
+        QDir::setCurrent(dir.path());
+        QSettings settings("GUIsettings.ini", QSettings::IniFormat);
+        settings.setValue("language/name", "en_US");
+        settings.sync();
+
+        MainWindow window;
+        window.initUI();
+        MfcWorkbench* workbench = window.findChild<MfcWorkbench*>("mfcWorkbench");
+        Util* util = window.findChild<Util*>();
+        QVERIFY(workbench != nullptr);
+        QVERIFY(util != nullptr);
+        window.lastClientPath = makeMockClient(dir.path(), "v4.23346-suspect");
+        QVERIFY(!window.lastClientPath.isEmpty());
+        window.clientWorkingDir->setPath(dir.path());
+
+        util->setRunningState(true);
+        workbench->setDeviceReady(true);
+        QString error;
+        QVERIFY2(workbench->applyCardIdentity("A1A2A3A4", Mfc::CardType::M1K, &error), qPrintable(error));
+        const quint64 session = workbench->activeSession();
+        workbench->document().setKeyVerified(10, 'A', "F67000B1A95A", Mfc::KeySource::Manual);
+
+        auto selectType = [](QComboBox* box, char type) {
+            for(int i = 0; i < box->count(); ++i)
+                if(box->itemData(i).toChar().toLatin1() == type)
+                {
+                    box->setCurrentIndex(i);
+                    return;
+                }
+        };
+
+        QComboBox* methodBox = workbench->findChild<QComboBox*>("mfcMethodBox");
+        QSpinBox* knownSector = workbench->findChild<QSpinBox*>("mfcKnownSectorSpin");
+        QComboBox* knownType = workbench->findChild<QComboBox*>("mfcKnownTypeBox");
+        QSpinBox* targetSector = workbench->findChild<QSpinBox*>("mfcTargetSectorSpin");
+        QComboBox* targetType = workbench->findChild<QComboBox*>("mfcTargetTypeBox");
+        QVERIFY(methodBox && knownSector && knownType && targetSector && targetType);
+        methodBox->setCurrentIndex(methodBox->findText("Hardnested"));
+        knownSector->setValue(10);
+        selectType(knownType, 'A');
+        targetSector->setValue(5); // block 23
+        selectType(targetType, 'A');
+        QVERIFY(QMetaObject::invokeMethod(workbench, "runSelectedMethod"));
+        QVERIFY(workbench->isTaskActive());
+
+        QElapsedTimer timer;
+        timer.start();
+        while(workbench->isTaskActive() && timer.elapsed() < 10000)
+            QTest::qWait(20);
+        QVERIFY(!workbench->isTaskActive());
+        QCOMPARE(workbench->document().key(5, 'A').value, QString("B1B17CC93BC4"));
+        QCOMPARE(workbench->document().key(5, 'A').state, Mfc::KeyState::Verified);
+        QCOMPARE(workbench->document().key(5, 'A').verifiedSession, session);
+        QCOMPARE(workbench->document().key(5, 'B').state, Mfc::KeyState::Unknown);
         util->setRunningState(false);
         QDir::setCurrent(oldCwd);
     }

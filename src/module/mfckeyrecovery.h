@@ -91,7 +91,16 @@ struct ParseResult
 // Parse one complete client output (ANSI is stripped here).  The sector number
 // is taken from the table row, never from the row order, so a partial or
 // shuffled table cannot shift a key into the wrong sector.
-ParseResult parseOutput(const QString& cleanOutput, const Mfc::Spec& spec);
+//
+// Methods that print no table (hardnested, darkside) report one key without a
+// sector; `target` says which sector/key type that key belongs to.
+struct Target
+{
+    int sector = -1;
+    char type = '\0';
+};
+ParseResult parseOutput(const QString& cleanOutput, const Mfc::Spec& spec,
+                        const Target& target = Target());
 
 struct MergeResult
 {
@@ -127,6 +136,10 @@ struct Command
     // pipe would be consumed as a key press and abort it.
     bool usesStdin = false;
     qint64 hardTimeoutMs = 30 * 60 * 1000;
+    // Methods that recover exactly one key (hardnested, darkside) print no table:
+    // the recovered key belongs to this sector/key type.
+    int targetSector = -1;
+    char targetType = '\0';
 };
 
 Command buildCheck(const QVariantMap& profile, const Mfc::Spec& spec,

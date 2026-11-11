@@ -141,6 +141,8 @@ private:
     MfcRecovery::NonceType nonce = MfcRecovery::NonceType::Unknown;
     MfcRecovery::Tracker tracker;
     MfcRecovery::Method currentMethod = MfcRecovery::Method::KnownKeys;
+    // Sector/key type a single-key method (hardnested, darkside) is aiming at.
+    MfcRecovery::Target currentTarget;
     QString taskOutput;
     bool taskRunning = false;
     bool deviceReady = false;

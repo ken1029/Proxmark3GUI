@@ -185,12 +185,14 @@ static void print_chk_table(void)
 {
     if (strcmp(env_or("MOCK_CHK_OUTPUT", "1"), "0") == 0)
         return;
-    emit_line("-----+-----+--------------+---+--------------+----");
-    emit_line(" Sec | Blk | key A        |res| key B        |res");
-    emit_line("-----+-----+--------------+---+--------------+----");
-    emit_line(" 000 | 003 | FFFFFFFFFFFF | D | 1234567890AB | D ");
-    emit_line(" 001 | 007 | A0A1A2A3A4A5 | H | BBBBBBBBBBBB | 0 ");
-    emit_line("-----+-----+--------------+---+--------------+----");
+    // v4.23346 prefixes every table line with "[+] "; the parser has to tolerate
+    // the tag, so the mock prints it too.
+    emit_line("[+] -----+-----+--------------+---+--------------+----");
+    emit_line("[+]  Sec | Blk | key A        |res| key B        |res");
+    emit_line("[+] -----+-----+--------------+---+--------------+----");
+    emit_line("[+]  000 | 003 | FFFFFFFFFFFF | D | 1234567890AB | D ");
+    emit_line("[+]  001 | 007 | A0A1A2A3A4A5 | H | BBBBBBBBBBBB | 0 ");
+    emit_line("[+] -----+-----+--------------+---+--------------+----");
 }
 
 static void run_command(const char *command, const char *os)
@@ -206,6 +208,11 @@ static void run_command(const char *command, const char *os)
         char marker[1100];
         snprintf(marker, sizeof(marker), "[+] 2026-11-10T11:53:37Z remark: %s", command + 4);
         emit_field(marker);
+    } else if (strstr(command, "hardnested") != NULL) {
+        // v4.23346 reports a single recovered key instead of a table.
+        emit_line("[=]  Time    | #nonces | Activity                                                | #states                   | Estimated");
+        emit_line("[=]       29 |    2657 | Brute force completed. Key found:          B1B17CC93BC4 |                         0 |            0s ");
+        emit_line("[=] ---------+---------+---------------------------------------------------------+---------------------------+---------------");
     } else if (strstr(command, "chk") != NULL || strstr(command, "autopwn") != NULL) {
         print_chk_table();
     } else if (strstr(command, "wrbl") != NULL || strstr(command, "csetblk") != NULL

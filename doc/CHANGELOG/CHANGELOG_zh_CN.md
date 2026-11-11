@@ -2,6 +2,11 @@
 
 [English](../../CHANGELOG.md)  
 
+### V0.3.3（feature/mfc-workbench，一次性程序輸出修正）
++ 釋放通道時不得停止收集進行中任務的輸出：一次性恢復任務會先停掉常駐 client 以釋放序列埠，而那個停止動作會清掉收集旗標，導致 `commandFinished()` 收到空字串，所有已取得的金鑰都被當成「方法結束，但沒有取得可用金鑰」
++ 讀得懂「只印一把金鑰」的方法：hardnested 的 `Brute force completed. Key found: XXXXXXXXXXXX`、darkside／nested 的 `Found valid key [ XXXXXXXXXXXX ]`，以及 sen 的 `Reader material recovered sec NNN key A = ...`、`Key sec NNN key X = ...`、`Found initial key: sector N ...`。hardnested／darkside 會把金鑰歸到命令的目標 sector／key type；沒有目標可歸屬時只回報警告，不會猜成 sector 0
++ mock client 改為輸出真實的 `[+] ` 表格前綴與 hardnested 結果，並以 `isolatedTaskSurvivesClientStop()`、`mfcRecoverySingleKeyOutput()`、`workbenchRunsHardnestedTask()` 固定這些不變式
+
 ### V0.3.2（feature/mfc-workbench，解析修正）
 + 真正讀得懂 client 的金鑰表：每一列都有 `[+] ` 前綴，樣式必須容許標籤而不是只允許空白；恢復完成後會回報已取得的金鑰，不再顯示「方法結束，但沒有取得可用金鑰」
 + 認得 `Static nonce....... 009080a2` 這種由 client 印出 nonce 值的靜態 nonce 行

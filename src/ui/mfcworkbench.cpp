@@ -327,13 +327,17 @@ void MfcWorkbench::buildUi()
     includeDefaultsBox = new QCheckBox(tr("Include built-in default keys"), methodPage);
     includeDefaultsBox->setChecked(true);
     knownSectorSpin = new QSpinBox(methodPage);
+    knownSectorSpin->setObjectName("mfcKnownSectorSpin");
     knownSectorSpin->setRange(0, doc.sectorCount() - 1);
     knownTypeBox = new QComboBox(methodPage);
+    knownTypeBox->setObjectName("mfcKnownTypeBox");
     knownTypeBox->addItem("A", 'A');
     knownTypeBox->addItem("B", 'B');
     targetSectorSpin = new QSpinBox(methodPage);
+    targetSectorSpin->setObjectName("mfcTargetSectorSpin");
     targetSectorSpin->setRange(0, doc.sectorCount() - 1);
     targetTypeBox = new QComboBox(methodPage);
+    targetTypeBox->setObjectName("mfcTargetTypeBox");
     targetTypeBox->addItem("A", 'A');
     targetTypeBox->addItem("B", 'B');
     runButton = new QPushButton(tr("Run selected method"), methodPage);
@@ -1008,6 +1012,8 @@ void MfcWorkbench::startMethod(MfcRecovery::Method method, const MfcRecovery::Co
 
     taskOutput.clear();
     currentMethod = method;
+    currentTarget.sector = command.targetSector;
+    currentTarget.type = command.targetType;
     cancelRequested = false;
     tracker.start(method, doc.keyCount());
     setTaskRunning(true);
@@ -1050,7 +1056,7 @@ void MfcWorkbench::onCommandFinished(const Util::ExecResult& result, const QStri
         return;
     taskOutput = Util::stripAnsi(output);
     taskSession = 0;
-    const MfcRecovery::ParseResult parsed = MfcRecovery::parseOutput(taskOutput, doc.spec());
+    const MfcRecovery::ParseResult parsed = MfcRecovery::parseOutput(taskOutput, doc.spec(), currentTarget);
     applyParsedResult(parsed, currentMethod, result.status);
 
     MfcRecovery::TaskState state = MfcRecovery::TaskState::Failed;

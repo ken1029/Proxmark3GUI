@@ -127,7 +127,8 @@ static bool isFoundMarker(const QString& marker)
     return c != QLatin1Char('0') && c != QLatin1Char('-') && c != QLatin1Char('?');
 }
 
-ParseResult parseOutput(const QString& cleanOutput, const Mfc::Spec& spec)
+ParseResult parseOutput(const QString& cleanOutput, const Mfc::Spec& spec,
+                        const Target& target)
 {
     ParseResult result;
 
@@ -220,6 +221,100 @@ ParseResult parseOutput(const QString& cleanOutput, const Mfc::Spec& spec)
        || cleanOutput.contains(QStringLiteral("Can't select card"))
        || cleanOutput.contains(QStringLiteral("command execution time out")))
         result.sawFailure = true;
+
+    // Methods that recover one key print the key itself, not a table:
+    //   hf mf hardnested  ... Brute force completed. Key found:  B1B17CC93BC4 |
+    //   hf mf darkside    [+] Found valid key [ B1B17CC93BC4 ]
+    //   hf mf staticnested [+] target block 24 key type A -- found valid key [ ... ]
+    //   hf mf sen         [+] Reader material recovered sec 006 key A = ...
+    QRegularExpression blockKey(QStringLiteral("block\\s+(\\d{1,3})\\s+key\\s+type\\s+([AB])"
+                                               ".*?found valid key\\s*\\[\\s*([0-9A-Fa-f]{12})\\s*\\]"),
+                                QRegularExpression::CaseInsensitiveOption);
+    QRegularExpression sectorKey(QStringLiteral("(?:recovered\\s+sec|key\\s+sec|sector)\\s+(\\d{1,3})"
+                                                "(?:\\s+block\\s+\\d{1,3})?\\s+key\\s+([AB])\\s*="
+                                                "\\s*([0-9A-Fa-f]{12})"),
+                                 QRegularExpression::CaseInsensitiveOption);
+    QRegularExpression loneKey(QStringLiteral("(?:brute force completed\\.\\s*key found\\s*:"
+                                              "|found valid key)\\s*\\[?\\s*([0-9A-Fa-f]{12})"),
+                               QRegularExpression::CaseInsensitiveOption);
+
+    const QStringList lines = cleanOutput.split(QLatin1Char('\n'));
+    for(const QString& line : lines)
+    {
+        if(line.trimmed().isEmpty())
+            continue;
+        Candidate candidate;
+        candidate.source = Mfc::KeySource::Recovery;
+        QRegularExpressionMatch match = blockKey.match(line);
+        if(match.hasMatch())
+        {
+            // "target block N" is the sector's first block (24 is sector 6).  Map
+            // it through the spec so a 4K card (32 four-block sectors, then eight
+            // sixteen-block sectors) stays right.
+            const int block = match.captured(1).toInt();
+            candidate.sector = -1;
+            for(int sector = 0; sector < spec.sectorCount; ++sector)
+            {
+                if(spec.firstBlockOfSector(sector) == block)
+                {
+                    candidate.sector = sector;
+                    break;
+                }
+            }
+            candidate.type = match.captured(2).at(0).toUpper().toLatin1();
+            candidate.key = match.captured(3).toUpper();
+            candidate.marker = '1';
+        }
+        else if((match = sectorKey.match(line)).hasMatch())
+        {
+            candidate.sector = match.captured(1).toInt();
+            candidate.type = match.captured(2).at(0).toUpper().toLatin1();
+            candidate.key = match.captured(3).toUpper();
+            candidate.marker = '1';
+        }
+        else if((match = loneKey.match(line)).hasMatch())
+        {
+            if(target.sector < 0)
+            {
+                result.warnings << QStringLiteral("recovered key %1 has no sector; the method "
+                                                  "did not name its target").arg(match.captured(1));
+                continue;
+            }
+            candidate.sector = target.sector;
+            candidate.type = (target.type == 'B') ? 'B' : 'A';
+            candidate.key = match.captured(1).toUpper();
+            candidate.marker = '1';
+        }
+        else
+        {
+            continue;
+        }
+
+        if(candidate.sector < 0)
+        {
+            result.warnings << QStringLiteral("recovered key names no sector of this card; ignored");
+            continue;
+        }
+        if(candidate.sector >= spec.sectorCount)
+        {
+            result.warnings << QStringLiteral("recovered key for sector %1 is outside the card; ignored")
+                               .arg(candidate.sector);
+            continue;
+        }
+        candidate.found = Mfc::Document::isKeyText(candidate.key);
+        // The table already carried this key: one candidate per sector/key type.
+        bool duplicate = false;
+        for(const Candidate& existing : result.keys)
+        {
+            if(existing.sector == candidate.sector && existing.type == candidate.type)
+            {
+                duplicate = true;
+                break;
+            }
+        }
+        if(!duplicate)
+            result.keys.append(candidate);
+    }
 
     return result;
 }
@@ -530,6 +625,8 @@ Command buildHardnested(const QVariantMap& profile, const Mfc::Spec& spec,
     command.text.replace(QStringLiteral("<target key block>"), QString::number(spec.trailerBlockOfSector(targetSector)));
     command.text.replace(QStringLiteral("<target key type>"), targetTypes.value(targetKeyName).toString().isEmpty()
                          ? targetKeyName.toLower() : targetTypes.value(targetKeyName).toString());
+    command.targetSector = targetSector;
+    command.targetType = (targetType == 'B') ? 'B' : 'A';
     command.usesStdin = true; // hardnested does not poll today; every method uses one protocol
     command.successPattern.clear(); // a one-shot process exit is the boundary; the table is parsed afterwards
     command.failurePattern = QStringLiteral("Can't authenticate|Static nonce detected|No tag found|"
@@ -555,8 +652,21 @@ static Command simpleCommand(const QVariantMap& profile, const QString& section,
 
 Command buildDarkside(const QVariantMap& profile)
 {
-    return simpleCommand(profile, QStringLiteral("darkside"), QStringLiteral("hf mf darkside"),
-                         30 * 60 * 1000);
+    Command command = simpleCommand(profile, QStringLiteral("darkside"),
+                                    QStringLiteral("hf mf darkside"), 30 * 60 * 1000);
+    // hf mf darkside recovers block 0 key A unless --blk/-b say otherwise.
+    command.targetSector = 0;
+    command.targetType = 'A';
+    if(command.text.contains(QStringLiteral("--blk")))
+    {
+        QRegularExpression blk(QStringLiteral("--blk\\s+(\\d{1,3})"));
+        const QRegularExpressionMatch match = blk.match(command.text);
+        if(match.hasMatch())
+            command.targetSector = match.captured(1).toInt() / 4;
+    }
+    if(QRegularExpression(QStringLiteral("(^|\\s)-b(\\s|$)")).match(command.text).hasMatch())
+        command.targetType = 'B';
+    return command;
 }
 
 Command buildSen(const QVariantMap& profile)

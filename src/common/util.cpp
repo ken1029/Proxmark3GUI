@@ -88,7 +88,13 @@ void Util::releaseChannel()
     const bool wasOwned = channelOwned;
     channelOwned = false;
     drainToken.clear();
-    isRequiringOutput = false;
+    // A running task still needs its output.  A one-shot recovery run frees the
+    // port by stopping the persistent client, and that stop reaches us as
+    // setRunningState(false) -> releaseChannel(): clearing the capture flag here
+    // would hand an empty QString to commandFinished() and every recovered key
+    // would be reported as "no usable key".
+    if(!asyncActive)
+        isRequiringOutput = false;
     if(!asyncActive)
         asyncTimer->stop();
     if(wasOwned)
