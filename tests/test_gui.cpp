@@ -3113,6 +3113,7 @@ private slots:
         const Mfu::IoResult parsed = Mfu::Document::parseInfo(info, &doc);
         QVERIFY2(parsed.ok, parsed.error.toUtf8().constData());
         QCOMPARE(doc.uid, QStringLiteral("04A2B3C4D5E6F0"));
+        QCOMPARE(doc.staticLock, QByteArray::fromHex("0000"));
         QCOMPARE(doc.type(), Mfu::Type::NTAG213);
         QCOMPARE(doc.pageCount(), 45);
         QCOMPARE(doc.unknownPages(), 45);

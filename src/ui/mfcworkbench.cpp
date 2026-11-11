@@ -1019,6 +1019,11 @@ void MfcWorkbench::closeDocument(int index)
 {
     if(index < 0 || index >= tabs.size())
         return;
+    if(taskRunning || planBusy || batchRunning)
+    {
+        setStatus(tr("Stop the running task before closing a document"));
+        return;
+    }
     if(tabs.size() == 1)
     {
         // Never leave the workbench without a document: reset the only tab.
@@ -1499,6 +1504,12 @@ bool MfcWorkbench::applyCardIdentity(const QString& uid, Mfc::CardType type, QSt
             emit documentTypeChanged(typeToInt(type));
         }
         doc.uid = normalized;
+        if(activeIndex >= 0 && activeIndex < tabs.size())
+        {
+            tabs[activeIndex].document = doc;
+            tabs[activeIndex].dirty = true;
+            refreshDocumentTabs();
+        }
         refreshIdentity();
         return true;
     }
@@ -1525,6 +1536,11 @@ bool MfcWorkbench::startNewDocumentForTarget(QString* error)
     else
         doc = Mfc::Document(targetType);
     doc.uid = targetUidValue;
+    if(activeIndex >= 0 && activeIndex < tabs.size())
+    {
+        tabs[activeIndex].document = doc;
+        tabs[activeIndex].dirty = true;
+    }
     nonce = MfcRecovery::NonceType::Unknown;
     updatingTables = true;
     cardTypeBox->setCurrentIndex(cardTypeBox->findData(typeToInt(targetType)));
@@ -2255,10 +2271,11 @@ MfcRecovery::Command MfcWorkbench::commandForMethod(MfcRecovery::Method method, 
 void MfcWorkbench::startMethod(MfcRecovery::Method method, const MfcRecovery::Command& command,
                                bool batchStep)
 {
-    if(!deviceReady || cardConfirmPending)
+    if(!deviceReady || cardConfirmPending || (!batchStep && util->isChannelOwned()))
     {
         setStatus(cardConfirmPending ? tr("Confirming the card; retry in a moment")
-                                     : tr("Connect the Proxmark3 first"));
+                                     : util->isChannelOwned() ? tr("The client is busy; wait for it to finish")
+                                                             : tr("Connect the Proxmark3 first"));
         return;
     }
     if(taskRunning && !batchStep)
@@ -2473,10 +2490,12 @@ void MfcWorkbench::cancelTask()
 
 void MfcWorkbench::verifyKeys()
 {
-    if(!deviceReady || taskRunning || cardConfirmPending)
+    if(!deviceReady || taskRunning || cardConfirmPending || util->isChannelOwned())
     {
         if(cardConfirmPending)
             setStatus(tr("Confirming the card; retry in a moment"));
+        else if(util->isChannelOwned())
+            setStatus(tr("The client is busy; wait for it to finish"));
         return;
     }
     // Keys are verified against the card in the field.  Identify it first
@@ -2614,10 +2633,12 @@ void MfcWorkbench::readBlocks()
 
 void MfcWorkbench::readUnknownBlocks()
 {
-    if(!deviceReady || taskRunning || cardConfirmPending)
+    if(!deviceReady || taskRunning || cardConfirmPending || util->isChannelOwned())
     {
         if(cardConfirmPending)
             setStatus(tr("Confirming the card; retry in a moment"));
+        else if(util->isChannelOwned())
+            setStatus(tr("The client is busy; wait for it to finish"));
         return;
     }
     if(!documentMatchesTarget())
@@ -2962,9 +2983,10 @@ void MfcWorkbench::writePlan()
                                      : tr("Another device task is still running"));
         return;
     }
-    if(!deviceReady)
+    if(!deviceReady || util->isChannelOwned())
     {
-        setStatus(tr("Connect the Proxmark3 first"));
+        setStatus(util->isChannelOwned() ? tr("The client is busy; wait for it to finish")
+                                          : tr("Connect the Proxmark3 first"));
         return;
     }
     if(!documentMatchesTarget())
@@ -3586,6 +3608,11 @@ void MfcWorkbench::confirmOneShotSession()
 
 void MfcWorkbench::readCardInfo()
 {
+    if(util->isChannelOwned())
+    {
+        setStatus(tr("The client is busy; wait for it to finish"));
+        return;
+    }
     QString uid;
     Mfc::CardType type = doc.cardType();
     QString error;
@@ -3836,10 +3863,12 @@ void MfcWorkbench::exportCompareReport()
 
 void MfcWorkbench::startBatchFromDialog()
 {
-    if(!deviceReady || taskRunning || planBusy || batchRunning || cardConfirmPending)
+    if(!deviceReady || taskRunning || planBusy || batchRunning || cardConfirmPending
+       || util->isChannelOwned())
     {
         setStatus(cardConfirmPending ? tr("Confirming the card; retry in a moment")
-                                     : tr("Another device task is still running"));
+                                     : util->isChannelOwned() ? tr("The client is busy; wait for it to finish")
+                                                             : tr("Another device task is still running"));
         return;
     }
     if(!documentMatchesTarget() && !ensureCardIdentified())
@@ -4005,6 +4034,8 @@ void MfcWorkbench::startBatchFromDialog()
     });
     connect(retry, &QPushButton::clicked, &dialog, [&]() {
         retryMissingKeys();
+        if(batchRunning)
+            setBusy(true);
         syncPlan();
     });
     connect(readRest, &QPushButton::clicked, &dialog, [&]() {
@@ -4038,10 +4069,12 @@ void MfcWorkbench::startBatchFromDialog()
 
 bool MfcWorkbench::startBatchRecovery(MfcRecovery::Method method, QString* error)
 {
-    if(!deviceReady || taskRunning || planBusy || batchRunning || cardConfirmPending)
+    if(!deviceReady || taskRunning || planBusy || batchRunning || cardConfirmPending
+       || util->isChannelOwned())
     {
         if(error != nullptr)
-            *error = tr("Another device task is still running");
+            *error = util->isChannelOwned() ? tr("The client is busy; wait for it to finish")
+                                             : tr("Another device task is still running");
         return false;
     }
     if(!documentMatchesTarget() && !ensureCardIdentified())
@@ -4076,6 +4109,14 @@ void MfcWorkbench::batchNext()
 {
     if(!batchRunning)
         return;
+    if(!cancelRequested && (!deviceReady || cardConfirmPending || util->isChannelOwned()))
+    {
+        // A one-shot recovery stopped the persistent client to free the port.
+        // Wait for the reconnect and the UID confirmation instead of treating a
+        // refused dispatch as a running command (which would wedge the queue).
+        QTimer::singleShot(300, this, &MfcWorkbench::batchNext);
+        return;
+    }
     if(batchRunning && !documentMatchesTarget() && !Util::isDemoMode())
     {
         cancelRequested = true;
@@ -4268,6 +4309,8 @@ void MfcWorkbench::batchAfterCommand(Util::ExecStatus status)
             // is asynchronous, so the recovered value stays a candidate until
             // it can be authenticated.  A persistent command is verified now.
             const bool oneShot = (batchMethod == MfcRecovery::Method::Nested
+                                  || batchMethod == MfcRecovery::Method::StaticNested
+                                  || batchMethod == MfcRecovery::Method::Hardnested
                                   || batchMethod == MfcRecovery::Method::Darkside);
             if(oneShot)
                 batchPlan.setResult(batchCurrent, MfcBatch::ItemState::Candidate,
@@ -4305,11 +4348,11 @@ void MfcWorkbench::batchAfterCommand(Util::ExecStatus status)
 
 void MfcWorkbench::retryMissingKeys()
 {
-    if(!batchRunning)
+    if(batchRunning)
         return;
-    const int count = batchPlan.retryMissing();
-    setStatus(tr("%1 key(s) queued for another attempt").arg(count));
-    batchNext();
+    QString error;
+    if(!startBatchRecovery(batchMethod, &error))
+        setStatus(error);
 }
 
 void MfcWorkbench::readRemainingBlocks()

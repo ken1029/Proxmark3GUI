@@ -612,7 +612,8 @@ IoResult Document::parseInfo(const QString& text, Document* out)
     if(versionMatch.hasMatch())
         doc.versionHex = Document::normalizedHex(versionMatch.captured(1));
 
-    const QRegularExpression lockRe(QStringLiteral("^\\s*Lock\\s*:\\s*((?:[0-9A-Fa-f]{2}\\s*){2})"),
+    const QRegularExpression lockRe(QStringLiteral("(?:^|\\n)[^\\r\\n]*?Lock\\s*:\\s*"
+                                                    "((?:[0-9A-Fa-f]{2}\\s*){2})"),
                                     QRegularExpression::MultilineOption);
     const QRegularExpressionMatch lockMatch = lockRe.match(clean);
     if(lockMatch.hasMatch())
