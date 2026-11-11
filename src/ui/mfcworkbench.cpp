@@ -1193,7 +1193,11 @@ void MfcWorkbench::verifyKeys()
         for(char type : {'A', 'B'})
         {
             const Mfc::KeyEntry& entry = doc.key(s, type);
-            if(entry.hasValue() && entry.state == Mfc::KeyState::Pending)
+            // A key verified in an earlier RF session (for example the recovery
+            // run before the automatic reconnect) is history, not evidence for
+            // the card in the field now.  Offer it for re-verification instead
+            // of skipping it because its state is still "Verified".
+            if(entry.hasValue() && !entry.verifiedIn(targetSession))
                 pending.append(qMakePair(s, type));
         }
     }

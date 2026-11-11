@@ -2173,6 +2173,56 @@ private slots:
         QDir::setCurrent(oldCwd);
     }
 
+    // After a reconnect every recovered key is historical.  "Verify keys" must
+    // re-authenticate those values, otherwise the data page has no key it may
+    // use and the user is stuck with "No candidate key to verify".
+    void verifyKeysRevalidatesHistoricalKeys()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString oldCwd = QDir::currentPath();
+        QDir::setCurrent(dir.path());
+        QSettings settings("GUIsettings.ini", QSettings::IniFormat);
+        settings.setValue("language/name", "en_US");
+        settings.sync();
+
+        MainWindow window;
+        window.initUI();
+        MfcWorkbench* workbench = window.findChild<MfcWorkbench*>("mfcWorkbench");
+        Util* util = window.findChild<Util*>();
+        QVERIFY(workbench != nullptr);
+        QVERIFY(util != nullptr);
+
+        workbench->setDeviceReady(true);
+        const quint64 oldSession = workbench->activeSession();
+        Mfc::Document& doc = workbench->document();
+        QVERIFY(doc.setKeyVerified(0, 'A', "FFFFFFFFFFFF", Mfc::KeySource::Manual, oldSession));
+        QVERIFY(doc.setKeyVerified(0, 'B', "1234567890AB", Mfc::KeySource::Manual, oldSession));
+
+        // A reconnect starts a new RF session; the old verification is history.
+        workbench->setDeviceReady(true);
+        const quint64 newSession = workbench->activeSession();
+        QVERIFY(newSession != oldSession);
+        QVERIFY(!doc.keyVerifiedIn(0, 'A', newSession));
+        QVERIFY(doc.setKeyVerified(9, 'A', "FFFFFFFFFFFF", Mfc::KeySource::Manual, newSession));
+        QString error;
+        QVERIFY2(workbench->applyCardIdentity("A1A2A3A4", Mfc::CardType::M1K, &error), qPrintable(error));
+
+        util->setRunningState(true);
+        QSignalSpy writeSpy(util, &Util::write);
+        armFixture(*util, QByteArray("FF FF FF FF FF FF 7F 07 88 00 12 34 56 78 90 AB\n"));
+        workbench->verifyKeys();
+
+        // Only the two historical keys are re-authenticated; the key already
+        // verified in this session is not sent again.
+        QCOMPARE(writeSpy.count(), 2);
+        QVERIFY(doc.keyVerifiedIn(0, 'A', newSession));
+        QVERIFY(doc.keyVerifiedIn(0, 'B', newSession));
+
+        util->setRunningState(false);
+        QDir::setCurrent(oldCwd);
+    }
+
     // Verification evidence belongs to the RF session that produced it.
     void mfcSessionScopedEvidence()
     {
