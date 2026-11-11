@@ -2,6 +2,8 @@
 
 #include <atomic>
 
+#include "module/demomode.h"
+
 Util::ClientType Util::clientType = CLIENTTYPE_OFFICIAL;
 
 int Util::rawTabIndex = 0;
@@ -129,6 +131,16 @@ void Util::processOutput(const QString& output)
 void Util::execCMD(const QString& cmd)
 {
     qDebug() << "executing: " << cmd;
+    if(isDemoMode())
+    {
+        const QString response = Demo::Provider::instance().respond(cmd);
+        if(!response.isEmpty())
+        {
+            emit refreshOutput(response);
+            QApplication::processEvents(QEventLoop::AllEvents, 10);
+        }
+        return;
+    }
     if(channelOwned || asyncActive || isRequiringOutput)
     {
         qWarning() << "ignoring command while the client channel is owned:" << cmd;
@@ -138,6 +150,16 @@ void Util::execCMD(const QString& cmd)
         emit write(cmd + "\n");
 }
 
+void Util::setDemoMode(bool on)
+{
+    Demo::Provider::instance().setActive(on);
+}
+
+bool Util::isDemoMode()
+{
+    return Demo::Provider::instance().active();
+}
+
 bool Util::startCommand(const AsyncCommand& command)
 {
     if(asyncActive || channelOwned || isRequiringOutput)
@@ -145,6 +167,36 @@ bool Util::startCommand(const AsyncCommand& command)
         qWarning() << "cannot start long command:" << command.cmd
                    << "busy=" << asyncActive << "owned=" << channelOwned;
         return false;
+    }
+    if(isDemoMode())
+    {
+        asyncCommand = command;
+        asyncActive = true;
+        asyncCancelRequested = false;
+        isolatedActive = false;
+        channelOwned = true;
+        asyncSessionId = ++sessionCounter;
+        asyncToken.clear();
+        drainToken.clear();
+        asyncLastLen = 0;
+        asyncHardTimer.start();
+        isRequiringOutput = true;
+        requiredOutput->clear();
+        timeStamp.start();
+        emit channelStateChanged(true);
+        const QString response = Demo::Provider::instance().respond(command.cmd);
+        QTimer::singleShot(40, this, [this, response]() {
+            if(!asyncActive)
+                return;
+            if(!response.isEmpty())
+            {
+                requiredOutput->append(response);
+                emit commandOutput(response);
+                emit refreshOutput(response);
+            }
+            finishAsync(EXEC_OK, true, false, false);
+        });
+        return true;
     }
     if(!command.isolated && !isRunning)
     {
@@ -306,6 +358,23 @@ Util::ExecResult Util::execCMDWithResult(const QString& cmd, const ReturnTrigger
     if(asyncActive || channelOwned)
     {
         res.status = EXEC_BUSY;
+        return res;
+    }
+    if(isDemoMode())
+    {
+        res.output = Demo::Provider::instance().respond(cmd);
+        const QString clean = stripAnsi(res.output);
+        res.successPatternMatched = matchAnyPattern(clean, trigger.expectedOutputs);
+        res.failurePatternMatched = matchAnyPattern(clean, trigger.failedOutputs);
+        res.promptSeen = true;
+        res.completionMarkerSeen = true;
+        if(res.failurePatternMatched)
+            res.status = EXEC_FAILED;
+        else if(trigger.expectedOutputs.isEmpty() || res.successPatternMatched)
+            res.status = EXEC_OK;
+        else
+            res.status = EXEC_TIMEOUT;
+        emit refreshOutput(res.output);
         return res;
     }
     if(!isRunning)

@@ -128,6 +128,11 @@ public:
     explicit Util(QObject *parent = nullptr);
 
     void execCMD(const QString& cmd);
+    // Device-free demonstration mode.  Commands are answered by the canned
+    // provider instead of a client process; the normal parsers and pages run
+    // unchanged and every result is marked as demo data.
+    static void setDemoMode(bool on);
+    static bool isDemoMode();
     // Long command API.  The caller must keep the GUI responsive and poll
     // commandFinished(); the device stays owned until it arrives.
     bool startCommand(const AsyncCommand& command);

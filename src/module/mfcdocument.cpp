@@ -1440,8 +1440,19 @@ CompareResult Document::compare(const Document& other) const
         else
         {
             diff.state = DiffState::Different;
+            QStringList bytes;
+            for(int b = 0; b < 16; b++)
+            {
+                const QString a = diff.a.mid(b * 2, 2);
+                const QString bb = diff.b.mid(b * 2, 2);
+                if(a != bb)
+                    bytes << QStringLiteral("%1: %2 -> %3").arg(b).arg(a, bb);
+            }
             if(spec().isTrailerBlock(i))
                 diff.note = QStringLiteral("trailer: keys or access bits differ");
+            if(!bytes.isEmpty())
+                diff.note += (diff.note.isEmpty() ? QString() : QStringLiteral("; "))
+                             + bytes.join(QStringLiteral(", "));
             result.different++;
         }
         result.blocks.append(diff);

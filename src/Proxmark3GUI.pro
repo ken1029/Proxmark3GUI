@@ -17,6 +17,7 @@ DEFINES += QT_DEPRECATED_WARNINGS
 
 SOURCES += \
     common/capabilities.cpp \
+    common/deviceidentity.cpp \
     common/myeventfilter.cpp \
     main.cpp \
     common/pm3process.cpp \
@@ -24,7 +25,13 @@ SOURCES += \
     common/util.cpp \
     module/lf.cpp \
     module/mifare.cpp \
+    module/demomode.cpp \
+    module/mfcbatch.cpp \
     module/mfcdocument.cpp \
+    module/mfcdraftstore.cpp \
+    module/mfclibrary.cpp \
+    module/mfudocument.cpp \
+    module/tracemodel.cpp \
     module/mfckeyrecovery.cpp \
     module/mfcwriteplan.cpp \
     module/t55xxtab.cpp \
@@ -33,17 +40,29 @@ SOURCES += \
     ui/mf_uid_parameterdialog.cpp \
     ui/mainwindow.cpp \
     ui/mfcworkbench.cpp \
+    ui/mfclibrarypage.cpp \
+    ui/mfupage.cpp \
+    ui/tracepage.cpp \
+    ui/diagnosticspage.cpp \
+    ui/commandpalette.cpp \
     ui/mf_attack_hardnesteddialog.cpp \
 
 HEADERS += \
     common/capabilities.h \
+    common/deviceidentity.h \
     common/myeventfilter.h \
     common/pm3process.h \
     common/pm3cmd.h \
     common/util.h \
     module/lf.h \
     module/mifare.h \
+    module/demomode.h \
+    module/mfcbatch.h \
     module/mfcdocument.h \
+    module/mfcdraftstore.h \
+    module/mfclibrary.h \
+    module/mfudocument.h \
+    module/tracemodel.h \
     module/mfckeyrecovery.h \
     module/mfcwriteplan.h \
     module/t55xxtab.h \
@@ -52,6 +71,11 @@ HEADERS += \
     ui/mf_uid_parameterdialog.h \
     ui/mainwindow.h \
     ui/mfcworkbench.h \
+    ui/mfclibrarypage.h \
+    ui/mfupage.h \
+    ui/tracepage.h \
+    ui/diagnosticspage.h \
+    ui/commandpalette.h \
     ui/mf_attack_hardnesteddialog.h \
 
 FORMS += \
@@ -72,7 +96,7 @@ qnx: target.path = /tmp/$${TARGET}/bin
 else: unix:!android: target.path = /opt/$${TARGET}/bin
 !isEmpty(target.path): INSTALLS += target
 
-VERSION = 0.3.7
+VERSION = 0.4.0
 QMAKE_TARGET_PRODUCT = "Proxmark3GUI"
 QMAKE_TARGET_DESCRIPTION = "A cross-platform GUI for Proxmark3 client"
 QMAKE_TARGET_COMPANY = "wh201906"

@@ -1,4 +1,16 @@
-﻿# Change Log
+### V0.4.0 (mfc-r9, multi-document workbench and device-free demo)
++ Multi-document workbench: each tab owns its document, source, unsaved state, filter, search, selection, scroll position and undo/redo history. A task is bound to the tab that started it; late output returns to that document and never to another card's tab. Documents that were never saved are written to an atomic local draft store and can be restored from the Document menu
++ Data table: Sector/Block/type/Hex/ASCII/state columns, sector and state filters, hex/ASCII search, a details pane (source, RF session, last operation, trailer Key A/B, access-bit complement and permissions), copy/paste of multiple rows with validation, selected-block export, and undo/redo
++ Batch key recovery: a queue of pending (sector, Key A/B) items with per-item state. Candidate verification, whole-table methods (chk/autopwn/SEN) and per-target methods (nested/staticnested/hardnested/darkside) share one task line; a failed item never blocks the next, cancelling keeps verified results, and "Retry missing only"/"Read remaining blocks" continue from there. Recovered values stay candidates until the card authenticates them
++ Continuous scan: read-only identification loop that keeps a card in one round while it stays on the antenna, starts a new round after removal, and optionally reads readable blocks. Scan results are normal documents with their own UID/source, selectable two at a time for comparison and batch export
++ Backup library: local index with real file SHA-256, duplicate marking, aliases/notes/tags, UID/type/date/completeness filters, drag-in of files and folders, conflict-aware batch conversion to BIN/EML/JSON, and direct "open in workbench"/"compare two"
++ Compare: each side can be the current document, a card snapshot taken in the current RF session, a file or a library backup; byte-level difference notes, difference/unknown filters and sector location. Write plan shows source, target UID/type, preview and post-write read-back side by side
++ New read-only pages: Ultralight/NTAG (type/page model, lock bits, NDEF TLV records, raw output) and Trace (packet table, direction/CRC/time filters, selected-packet CSV/pcapng export). Diagnostics page reports COM/USB identity, client/firmware versions, capability manifest, channel ownership and handshake errors, with clipboard summary and report export
++ `Ctrl+K` command search, a fixed top status strip (device/COM, connection, card UID/type, document), serial hot-plug with USB-serial reconnection across COM renumbering, remembered window/dock state, and Traditional Chinese translations for the new strings
++ Demonstration mode: the normal workbench commands are answered by a canned Classic card and two differing dumps, so identify/read/compare/write-preview can be exercised without a device; every result is labelled as demo data and uses its own source/session. Imported real backups still work offline
++ No firmware or client change: capabilities 11, client v4.23346
+
+# Change Log
 
 [中文](doc/CHANGELOG/CHANGELOG_zh_CN.md)  
 

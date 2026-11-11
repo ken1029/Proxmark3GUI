@@ -15,12 +15,20 @@
 #include "common/util.h"
 #include "common/pm3cmd.h"
 #include "common/capabilities.h"
+#include "common/deviceidentity.h"
+#include "module/demomode.h"
+#include "module/mfcbatch.h"
+#include "module/mfcdraftstore.h"
+#include "module/mfclibrary.h"
+#include "module/mfudocument.h"
+#include "module/tracemodel.h"
 #include "module/mfcdocument.h"
 #include "module/mfckeyrecovery.h"
 #include "common/pm3process.h"
 #include "ui/mf_sim_simdialog.h"
 #include "ui/mainwindow.h"
 #include "ui/mfcworkbench.h"
+#include "ui/commandpalette.h"
 #include <QComboBox>
 #include <QMessageBox>
 #include <QSettings>
@@ -29,6 +37,7 @@
 #include <QPushButton>
 #include <QTabWidget>
 #include <QTableWidget>
+#include <QTabBar>
 
 #ifndef SRCDIR
 #define SRCDIR "."
@@ -1086,6 +1095,13 @@ private slots:
         const QFileInfo info(client);
         if(!info.isFile() || !info.isExecutable())
             QSKIP("real Linux client not available");
+        // The binary may be present but miss a runtime library (for example
+        // libpython from the build host).  That is an environment problem, not
+        // a handshake regression: probe it once and skip instead of failing.
+        QProcess probe;
+        probe.start(client, QStringList{QStringLiteral("--version")});
+        if(!probe.waitForFinished(5000) || probe.exitCode() != 0)
+            QSKIP("real Linux client cannot run in this environment");
 
         const ConnectObservation observation = runConnect(client, 15000);
         QCOMPARE(observation.stateCount, 1); // state update to Not Connected
@@ -2998,8 +3014,396 @@ private slots:
 
         QDir::setCurrent(oldCwd);
     }
+    void mfcLibraryIndex()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        Mfc::Document doc(Mfc::CardType::M1K);
+        doc.uid = QStringLiteral("A1B2C3D4");
+        for(int i = 0; i < doc.blockCount(); i++)
+            doc.setBlock(i, QStringLiteral("%1").arg(i, 32, 16, QLatin1Char('0')).toUpper(),
+                         Mfc::BlockState::Read);
+
+        Mfc::Library library(dir.filePath(QStringLiteral("lib")));
+        QVERIFY(library.load());
+        Mfc::LibraryEntry entry;
+        QVERIFY(library.importDocument(doc, QStringLiteral("card-a"), &entry));
+        QVERIFY(!entry.sha256.isEmpty());
+        QVERIFY(QFileInfo::exists(entry.filePath));
+        QCOMPARE(library.entries().size(), 1);
+
+        bool duplicate = false;
+        QVERIFY(library.importDocument(doc, QStringLiteral("card-b"), &entry, nullptr, &duplicate));
+        QVERIFY(duplicate);
+        QCOMPARE(library.entries().size(), 1);
+
+        Mfc::LibraryFilter filter;
+        filter.text = QStringLiteral("a1b2");
+        QCOMPARE(library.filtered(filter).size(), 1);
+        filter.text = QStringLiteral("nothing");
+        QCOMPARE(library.filtered(filter).size(), 0);
+
+        entry.alias = QStringLiteral("Kitchen");
+        entry.notes = QStringLiteral("front door");
+        QVERIFY(library.updateEntry(entry));
+        Mfc::Library reloaded(dir.filePath(QStringLiteral("lib")));
+        QVERIFY(reloaded.load());
+        QCOMPARE(reloaded.entries().size(), 1);
+        QCOMPARE(reloaded.entries().first().alias, QStringLiteral("Kitchen"));
+        QCOMPARE(reloaded.entries().first().blockCount, doc.blockCount());
+
+        const QVector<Mfc::LibraryExportItem> plan =
+            library.planExport(library.entries(), dir.filePath(QStringLiteral("out")),
+                               QStringLiteral("json"));
+        QCOMPARE(plan.size(), 1);
+        QVERIFY(!plan.first().exists);
+        QVERIFY(Mfc::Library::exportEntry(entry, plan.first().targetPath, QStringLiteral("json")));
+        Mfc::Document exported;
+        const Mfc::IoResult loaded = Mfc::Document::loadDataFile(plan.first().targetPath,
+                                                                QStringLiteral("json"), &exported);
+        QVERIFY(loaded.ok);
+        QCOMPARE(exported.blockHex(0), doc.blockHex(0));
+        QCOMPARE(exported.uid, doc.uid);
+
+        QVERIFY(library.remove(entry.id, true));
+        QCOMPARE(library.entries().size(), 0);
+        QVERIFY(!QFileInfo::exists(entry.filePath));
+    }
+
+    void mfcDraftStoreRoundTrip()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        Mfc::Document doc(Mfc::CardType::M1K);
+        doc.uid = QStringLiteral("A1B2C3D4");
+        doc.setBlock(0, QStringLiteral("A1B2C3D4D40800046263646566676869"), Mfc::BlockState::Read, 7);
+
+        Mfc::DraftStore store(dir.filePath(QStringLiteral("drafts")));
+        QString id;
+        QVERIFY(store.save(doc, QString(), QStringLiteral("tab 1"), QStringLiteral("card"), 7, &id));
+        QVERIFY(!id.isEmpty());
+
+        Mfc::Document loaded;
+        Mfc::DraftInfo info;
+        QVERIFY(store.load(id, &loaded, &info));
+        QCOMPARE(info.id, id);
+        QCOMPARE(info.session, quint64(7));
+        QCOMPARE(info.name, QStringLiteral("tab 1"));
+        QCOMPARE(loaded.uid, doc.uid);
+        QCOMPARE(loaded.blockHex(0), doc.blockHex(0));
+
+        Mfc::DraftStore reloaded(dir.filePath(QStringLiteral("drafts")));
+        QVERIFY(reloaded.load());
+        QCOMPARE(reloaded.drafts().size(), 1);
+        QVERIFY(reloaded.remove(id));
+        Mfc::DraftStore empty(dir.filePath(QStringLiteral("drafts")));
+        QVERIFY(empty.load());
+        QCOMPARE(empty.drafts().size(), 0);
+    }
+
+    void mfuDocumentPagesAndNdef()
+    {
+        const QString info = QStringLiteral(
+            "[=] --- Tag Information --------------------------\n"
+            "[=]       TYPE: NTAG 213 144bytes (NT2H1311G0DU)\n"
+            "[+]       UID: 04 A2 B3 C4 D5 E6 F0\n"
+            "[=]      Lock: 00 00 - 0000000000000000\n"
+            "[=] Product type: NTAG\n");
+        Mfu::Document doc;
+        const Mfu::IoResult parsed = Mfu::Document::parseInfo(info, &doc);
+        QVERIFY2(parsed.ok, parsed.error.toUtf8().constData());
+        QCOMPARE(doc.uid, QStringLiteral("04A2B3C4D5E6F0"));
+        QCOMPARE(doc.type(), Mfu::Type::NTAG213);
+        QCOMPARE(doc.pageCount(), 45);
+        QCOMPARE(doc.unknownPages(), 45);
+
+        const QString dump = QStringLiteral(
+            "block#   | data        |lck| ascii\n"
+            "---------+-------------+---+------\n"
+            " 0/0x00 | 04 A2 B3 7C |   | ...\n"
+            " 1/0x01 | C4 D5 E6 F0 |   | ...\n"
+            " 2/0x02 | F0 48 00 00 |   | ...\n"
+            " 3/0x03 | E1 10 12 00 |   | ...\n"
+            " 4/0x04 | 03 0F D1 01 | 0 | ...\n"
+            " 5/0x05 | 0B 55 01 67 | 0 | ...\n"
+            " 6/0x06 | 6F 6F 67 6C | 0 | ...\n"
+            " 7/0x07 | 65 2E 63 6F | 0 | ...\n"
+            " 8/0x08 | 6D FE 00 00 | 0 | ...\n");
+        const Mfu::IoResult dumped = Mfu::Document::parseDump(dump, &doc);
+        QVERIFY2(dumped.ok, dumped.error.toUtf8().constData());
+        QCOMPARE(doc.readPages(), 9);
+        QCOMPARE(doc.unknownPages(), 36);
+        QVERIFY(doc.pageHex(10).isEmpty());
+        QCOMPARE(doc.pageHex(6), QStringLiteral("6F6F676C"));
+
+        const Mfu::Ndef ndef = doc.parseNdef();
+        QVERIFY(ndef.present);
+        QVERIFY(!ndef.complete); // 9 of 45 pages were read
+        QVERIFY(ndef.error.contains(QStringLiteral("read")));
+        QCOMPARE(ndef.records.size(), 1);
+        QCOMPARE(ndef.records.first().typeName, QStringLiteral("U"));
+        QCOMPARE(ndef.records.first().text, QStringLiteral("http://www.google.com"));
+
+        Mfu::Document round;
+        const Mfu::IoResult json = Mfu::Document::fromJson(doc.toJson(), &round);
+        QVERIFY2(json.ok, json.error.toUtf8().constData());
+        QCOMPARE(round.pageHex(4), doc.pageHex(4));
+        QCOMPARE(round.uid, doc.uid);
+
+        // Static lock bit 4 locks page 3; an unread page stays unknown.
+        Mfu::Document locked;
+        QVERIFY(Mfu::Document::parseInfo(info, &locked).ok);
+        locked.staticLock = QByteArray::fromHex("0800");
+        QVERIFY(locked.locked(3));
+        QVERIFY(!locked.locked(4));
+        QVERIFY(locked.pageState(4) == Mfu::PageState::Unknown);
+    }
+
+    void traceParsingAndFilter()
+    {
+        const QString text = QStringLiteral(
+            "      Start |        End | Src | Data                                                                     | CRC | Annotation\n"
+            "------------+------------+-----+--------------------------------------------------------------------------+-----+--------------------\n"
+            "          0 |         84 | Rdr |26                                                                       |     | \n"
+            "        100 |        200 | Tag |04 00                                                                   | ok  | \n"
+            "        300 |        400 | Rdr |50 00                                                                   | !!  | \n"
+            "            |            |     |AA BB                                                                   |     | continuation\n");
+        const Trace::ParseResult parsed = Trace::parse(text);
+        QVERIFY2(parsed.ok, parsed.error.toUtf8().constData());
+        QCOMPARE(parsed.packets.size(), 3);
+        QCOMPARE(parsed.packets.at(0).direction, Trace::Direction::Reader);
+        QCOMPARE(parsed.packets.at(1).data, QByteArray::fromHex("0400"));
+        QCOMPARE(parsed.packets.at(1).crc, Trace::Crc::Ok);
+        QCOMPARE(parsed.packets.at(2).crc, Trace::Crc::Fail);
+        QCOMPARE(parsed.packets.at(2).data, QByteArray::fromHex("5000AABB"));
+        QVERIFY(parsed.packets.at(2).annotation.contains(QStringLiteral("continuation")));
+
+        Trace::Filter tag;
+        tag.hasDirection = true;
+        tag.direction = Trace::Direction::Tag;
+        QCOMPARE(Trace::filter(parsed.packets, tag).size(), 1);
+        Trace::Filter bad;
+        bad.hasCrc = true;
+        bad.crc = Trace::Crc::Fail;
+        QCOMPARE(Trace::filter(parsed.packets, bad).size(), 1);
+        Trace::Filter range;
+        range.hasTime = true;
+        range.from = 250;
+        range.to = 350;
+        QCOMPARE(Trace::filter(parsed.packets, range).size(), 1);
+        Trace::Filter search;
+        search.text = QStringLiteral("aa bb");
+        QCOMPARE(Trace::filter(parsed.packets, search).size(), 1);
+
+        const QByteArray csv = Trace::toCsv(parsed.packets);
+        QVERIFY(csv.startsWith("index,start,end,direction,data,crc"));
+        QVERIFY(csv.contains("Rdr"));
+        QVERIFY(Trace::toHexText(parsed.packets).contains("000000 00 fe"));
+    }
+
+    void deviceIdentityMatchesSerialAcrossPorts()
+    {
+        Device::Identity stored;
+        stored.portName = QStringLiteral("COM3");
+        stored.serial = QStringLiteral("PM3-0001");
+        stored.vid = 0x9AC4;
+        stored.pid = 0x4B8F;
+        stored.hasVidPid = true;
+        stored.description = QStringLiteral("Proxmark3");
+
+        Device::Identity moved = stored;
+        moved.portName = QStringLiteral("COM9");
+        QCOMPARE(Device::Identity::match(QVector<Device::Identity>{moved}, stored), 0);
+
+        Device::Identity other = stored;
+        other.serial = QStringLiteral("PM3-0002");
+        QCOMPARE(Device::Identity::match(QVector<Device::Identity>{other}, stored), -1);
+
+        Device::Identity noSerial = stored;
+        noSerial.serial.clear();
+        noSerial.portName = QStringLiteral("COM3");
+        QCOMPARE(Device::Identity::match(QVector<Device::Identity>{noSerial}, noSerial), 0);
+
+        Device::Identity ambiguousA = moved;
+        Device::Identity ambiguousB = moved;
+        ambiguousB.portName = QStringLiteral("COM11");
+        QCOMPARE(Device::Identity::match(QVector<Device::Identity>{ambiguousA, ambiguousB}, stored), -1);
+        QVERIFY(stored.isProxmark());
+    }
+
+    void mfcBatchPlanProgress()
+    {
+        Mfc::Document doc(Mfc::CardType::M1K);
+        doc.setKeyVerified(0, 'A', QStringLiteral("FFFFFFFFFFFF"), Mfc::KeySource::Card, 5);
+        doc.setKeyVerified(0, 'B', QStringLiteral("FFFFFFFFFFFF"), Mfc::KeySource::Card, 5);
+        doc.setKey(1, 'A', QStringLiteral("112233445566"), Mfc::KeyState::Pending,
+                   Mfc::KeySource::Imported);
+
+        MfcBatch::Plan plan;
+        plan.build(doc, 5);
+        QCOMPARE(plan.size(), 30);
+        int index = plan.next();
+        QCOMPARE(index, 0);
+        QVERIFY(plan.setResult(index, MfcBatch::ItemState::Running));
+        QVERIFY(plan.setResult(index, MfcBatch::ItemState::Failed, QStringLiteral("no answer")));
+        MfcBatch::Progress progress = plan.progress();
+        QCOMPARE(progress.total, 30);
+        QCOMPARE(progress.processed, 1);
+        QCOMPARE(progress.failed, 1);
+        QCOMPARE(plan.retryMissing(), 1);
+        QCOMPARE(plan.progress().processed, 0);
+
+        index = plan.next();
+        QVERIFY(plan.setResult(index, MfcBatch::ItemState::Verified, QString(), QStringLiteral("AABBCCDDEEFF")));
+        plan.invalidateRunning(QStringLiteral("card changed"));
+        QCOMPARE(plan.progress().verified, 1);
+        QCOMPARE(plan.progress().total, 30);
+    }
+
+    void demoModeAnswersClientCommands()
+    {
+        Util::setDemoMode(true);
+        Util util;
+        Util::ExecResult info = util.execCMDWithResult(QStringLiteral("hf 14a info"));
+        QVERIFY(info.isOk());
+        QVERIFY(info.output.contains(QStringLiteral("A1 B2 C3 D4")));
+
+        Util::ReturnTrigger readTrigger(QStringList(QStringLiteral("([0-9a-fA-F]{2} ){15}[0-9a-fA-F]{2}")));
+        readTrigger.failedOutputs = QStringList(QStringLiteral("\\[-\\]"));
+        Util::ExecResult wrong = util.execCMDWithResult(
+                                     QStringLiteral("hf mf rdbl --blk 4 -a -k 000000000000"), readTrigger);
+        QCOMPARE(wrong.status, Util::EXEC_FAILED);
+        Util::ExecResult good = util.execCMDWithResult(
+                                    QStringLiteral("hf mf rdbl --blk 4 -a -k FFFFFFFFFFFF"), readTrigger);
+        QVERIFY(good.isOk());
+        QVERIFY(good.successPatternMatched);
+        const QRegularExpressionMatch data = QRegularExpression(
+            QStringLiteral("([0-9A-F]{2} ){15}[0-9A-F]{2}")).match(good.output);
+        QVERIFY(data.hasMatch());
+
+        QSignalSpy finished(&util, &Util::commandFinished);
+        Util::AsyncCommand command;
+        command.cmd = QStringLiteral("hf mf chk --1k");
+        command.label = QStringLiteral("demo");
+        QVERIFY(util.startCommand(command));
+        QVERIFY(finished.wait(3000));
+        QCOMPARE(finished.count(), 1);
+        QVERIFY(finished.first().at(1).toString().contains(QStringLiteral("Done!")));
+        Util::setDemoMode(false);
+    }
+
+
+    void workbenchMultiDocumentTabs()
+    {
+        MainWindow window;
+        MfcWorkbench* workbench = window.findChild<MfcWorkbench*>();
+        QVERIFY(workbench != nullptr);
+        const int initialCount = workbench->documentCount();
+        QVERIFY(initialCount >= 1);
+        const QString firstUid = workbench->document().uid;
+
+        Mfc::Document second(Mfc::CardType::M1K);
+        second.uid = QStringLiteral("11223344");
+        second.setBlock(0, QStringLiteral("11223344440800046263646566676869"),
+                        Mfc::BlockState::Read);
+        const int index = workbench->addDocument(second, QStringLiteral("Second"),
+                                                 QStringLiteral("new"));
+        QCOMPARE(workbench->documentCount(), initialCount + 1);
+        QCOMPARE(workbench->currentDocumentIndex(), index);
+        QCOMPARE(workbench->document().uid, second.uid);
+        workbench->markDirty();
+        QVERIFY(workbench->documentTabDirty(index));
+
+        workbench->activateDocument(0);
+        QCOMPARE(workbench->currentDocumentIndex(), 0);
+        QCOMPARE(workbench->document().uid, firstUid);
+        workbench->activateDocument(index);
+        QCOMPARE(workbench->document().blockHex(0), second.blockHex(0));
+
+        QTabBar* bar = workbench->findChild<QTabBar*>(QStringLiteral("mfcDocumentTabs"));
+        QVERIFY(bar != nullptr);
+        QCOMPARE(bar->count(), workbench->documentCount());
+    }
+
+    void workbenchDraftAutosaveAndRestore()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        MainWindow window;
+        MfcWorkbench* workbench = window.findChild<MfcWorkbench*>();
+        QVERIFY(workbench != nullptr);
+        workbench->setDraftStoreDir(dir.filePath(QStringLiteral("drafts")));
+        Mfc::Document document(Mfc::CardType::M1K);
+        document.uid = QStringLiteral("A1B2C3D4");
+        document.setBlock(0, QStringLiteral("A1B2C3D4D40800046263646566676869"),
+                          Mfc::BlockState::Read, 9);
+        workbench->addDocument(document, QStringLiteral("Draft me"), QStringLiteral("card"));
+        workbench->markDirty();
+        QVERIFY(QMetaObject::invokeMethod(workbench, "flushDrafts"));
+        QCOMPARE(workbench->draftCount(), 1);
+        const QString id = workbench->draftIdAt(0);
+        QVERIFY(!id.isEmpty());
+
+        const int before = workbench->documentCount();
+        QString error;
+        QVERIFY2(workbench->restoreDraft(id, &error), qPrintable(error));
+        QCOMPARE(workbench->documentCount(), before + 1);
+        QCOMPARE(workbench->document().uid, document.uid);
+        QCOMPARE(workbench->documentTabSource(workbench->currentDocumentIndex()),
+                 QStringLiteral("draft"));
+        QCOMPARE(workbench->draftCount(), 0);
+    }
+
+    void workbenchDemoModeFlow()
+    {
+        Util::setDemoMode(true);
+        MainWindow window;
+        MfcWorkbench* workbench = window.findChild<MfcWorkbench*>();
+        QVERIFY(workbench != nullptr);
+        workbench->setDeviceReady(true);
+        workbench->readCardInfo();
+        QCOMPARE(workbench->document().uid, QStringLiteral("A1B2C3D4"));
+        QVERIFY(workbench->document().completeBlockCount() > 0);
+        QVERIFY(workbench->documentMatchesTarget());
+
+        QString error;
+        QVERIFY2(workbench->startBatchRecovery(MfcRecovery::Method::Dictionary, &error),
+                 qPrintable(error));
+        QElapsedTimer timer;
+        timer.start();
+        while(workbench->isTaskActive() && timer.elapsed() < 10000)
+            QTest::qWait(20);
+        QVERIFY(!workbench->isTaskActive());
+        QCOMPARE(workbench->document().verifiedKeyCount(), workbench->document().keyCount());
+        Util::setDemoMode(false);
+    }
+
+    void commandPaletteNormalizes()
+    {
+        QCOMPARE(CommandPalette::normalized(QStringLiteral("  Save   File ")),
+                 QStringLiteral("save file"));
+        QCOMPARE(CommandPalette::normalized(QStringLiteral("Open\tDump")),
+                 QStringLiteral("open dump"));
+        QCOMPARE(CommandPalette::normalized(QString()), QString());
+    }
+
+    void mfcWritePlanReadBack()
+    {
+        Mfc::Document document(Mfc::CardType::M1K);
+        for(int i = 0; i < document.blockCount(); i++)
+            document.setBlock(i, QString(32, QLatin1Char('0')), Mfc::BlockState::Read);
+        Mfc::WritePlan plan;
+        plan.reset(document, 3);
+        plan.setReadBack(4, QStringLiteral("00112233445566778899AABBCCDDEEFF"));
+        Mfc::WriteRow row;
+        QVERIFY(plan.row(4, &row));
+        QCOMPARE(row.readBack, QStringLiteral("00112233445566778899AABBCCDDEEFF"));
+    }
 };
 
+// Full QApplication shutdown path: aboutToQuit fires while the window is still
+// alive, then exec() returns and the stack MainWindow destructor runs. Run this
+// under an external timeout; a hang means the thread/process cleanup is wrong.
 // Full QApplication shutdown path: aboutToQuit fires while the window is still
 // alive, then exec() returns and the stack MainWindow destructor runs. Run this
 // under an external timeout; a hang means the thread/process cleanup is wrong.

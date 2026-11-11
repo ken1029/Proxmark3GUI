@@ -84,6 +84,7 @@ struct WriteRow
     WriteOutcome outcome = WriteOutcome::Pending;
     PreviewState preview = PreviewState::NotPreviewed;
     QString cardHex;   // preview read-back, may contain '?'
+    QString readBack;  // post-write read-back, when one was possible
     QString note;      // human readable state detail
 };
 
@@ -122,6 +123,7 @@ public:
 
     // Preview results.  "different"/"unreadable" never imply permission.
     void setPreview(int block, const QString& cardHex, PreviewState state, const QString& note);
+    void setReadBack(int block, const QString& hex);
     void clearPreview();
 
     void setOutcome(int block, WriteOutcome outcome, const QString& note = QString());

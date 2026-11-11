@@ -1,13 +1,21 @@
 ﻿#include "ui/mfcworkbench.h"
 
+#include <QAction>
+#include <algorithm>
+#include <functional>
+
 #include <QApplication>
 #include <QAbstractItemView>
+#include <QClipboard>
+#include <QFileInfo>
+#include <QMenu>
 #include <QColor>
 #include <QHBoxLayout>
 #include <QPair>
 #include <QTextCursor>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDataStream>
 #include <QDateTime>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -32,12 +40,17 @@
 #include <QSignalBlocker>
 #include <QScrollBar>
 #include <QSpinBox>
+#include <QSplitter>
+#include <QTabBar>
 #include <QTabWidget>
 #include <QTableWidget>
+#include <QToolButton>
 #include <QTimer>
 #include <QVBoxLayout>
 
 #include "common/pm3cmd.h"
+#include "module/demomode.h"
+#include "module/mfclibrary.h"
 #include "module/mifare.h"
 
 namespace
@@ -111,6 +124,25 @@ QColor stateColor(Mfc::KeyState state)
     return QColor(120, 120, 120);
 }
 
+QString asciiOf(const QString& hex)
+{
+    QString result;
+    for(int i = 0; i + 1 < hex.size(); i += 2)
+    {
+        const QChar hi = hex.at(i);
+        const QChar lo = hex.at(i + 1);
+        if(hi == QLatin1Char('?') || lo == QLatin1Char('?'))
+        {
+            result += QLatin1Char('.');
+            continue;
+        }
+        bool ok = false;
+        const int value = hex.mid(i, 2).toInt(&ok, 16);
+        result += (ok && value >= 0x20 && value < 0x7f) ? QChar(value) : QLatin1Char('.');
+    }
+    return result;
+}
+
 QColor diffColor(Mfc::DiffState state)
 {
     switch(state)
@@ -143,12 +175,52 @@ MfcWorkbench::MfcWorkbench(Util* util, Mifare* mifare, QWidget* parent)
     connect(util, &Util::commandFinished, this, &MfcWorkbench::onCommandFinished);
     connect(util, &Util::abortClientRequested, this, &MfcWorkbench::abortClientRequested);
 
+    draftTimer = new QTimer(this);
+    draftTimer->setInterval(15000);
+    connect(draftTimer, &QTimer::timeout, this, &MfcWorkbench::flushDrafts);
+    draftTimer->start();
+
+    scanTimer = new QTimer(this);
+    scanTimer->setInterval(1500);
+    connect(scanTimer, &QTimer::timeout, this, &MfcWorkbench::scanTick);
+
+    drafts.setDir(QDir::current().filePath(QStringLiteral("drafts")));
+    drafts.load();
     importFromMifare();
+    addDocument(doc, tr("Document 1"), QStringLiteral("new"));
+    refreshDocumentTabs();
 }
 
 void MfcWorkbench::buildUi()
 {
     QVBoxLayout* root = new QVBoxLayout(this);
+
+    QHBoxLayout* documentBar = new QHBoxLayout();
+    docTabBar = new QTabBar(this);
+    docTabBar->setObjectName("mfcDocumentTabs");
+    docTabBar->setExpanding(false);
+    docTabBar->setTabsClosable(true);
+    docTabBar->setMovable(false);
+    docTabBar->setUsesScrollButtons(true);
+    docTabBar->setElideMode(Qt::ElideRight);
+    docMenuButton = new QToolButton(this);
+    docMenuButton->setObjectName("mfcDocumentMenu");
+    docMenuButton->setText(tr("Document"));
+    docMenuButton->setPopupMode(QToolButton::InstantPopup);
+    QMenu* documentMenu = new QMenu(docMenuButton);
+    documentMenu->addAction(tr("New document"), this, &MfcWorkbench::newDocumentTab);
+    documentMenu->addAction(tr("Open dump..."), this, &MfcWorkbench::openDocumentTab);
+    documentMenu->addAction(tr("Save document..."), this, &MfcWorkbench::saveCurrentDocument);
+    documentMenu->addSeparator();
+    documentMenu->addAction(tr("Rename tab..."), this, &MfcWorkbench::renameCurrentDocument);
+    documentMenu->addAction(tr("Close tab"), this, &MfcWorkbench::closeCurrentDocument);
+    documentMenu->addSeparator();
+    documentMenu->addAction(tr("Restore draft..."), this, &MfcWorkbench::restoreDraftDialog);
+    documentMenu->addAction(tr("Save drafts now"), this, &MfcWorkbench::flushDrafts);
+    docMenuButton->setMenu(documentMenu);
+    documentBar->addWidget(docTabBar, 1);
+    documentBar->addWidget(docMenuButton);
+    root->addLayout(documentBar);
 
     QGroupBox* summaryBox = new QGroupBox(tr("Card / document"), this);
     QGridLayout* summary = new QGridLayout(summaryBox);
@@ -184,10 +256,18 @@ void MfcWorkbench::buildUi()
     blockSummary = new QLabel(summaryBox);
     stageLabel = new QLabel(summaryBox);
     statusLabel = new QLabel(summaryBox);
+    batchLabel = new QLabel(summaryBox);
+    batchLabel->setObjectName("mfcBatchLabel");
+    batchLabel->setWordWrap(true);
+    summary->addWidget(batchLabel, 5, 0, 1, 7);
     progress = new QProgressBar(summaryBox);
     progress->setRange(0, 100);
     progress->setValue(0);
     progress->setTextVisible(true);
+    keySummary->setTextFormat(Qt::RichText);
+    blockSummary->setTextFormat(Qt::RichText);
+    keySummary->setTextInteractionFlags(Qt::TextBrowserInteraction);
+    blockSummary->setTextInteractionFlags(Qt::TextBrowserInteraction);
     summary->addWidget(keySummary, 2, 0, 1, 4);
     summary->addWidget(blockSummary, 2, 4, 1, 3);
     summary->addWidget(stageLabel, 3, 0, 1, 4);
@@ -195,10 +275,10 @@ void MfcWorkbench::buildUi()
     summary->addWidget(progress, 4, 0, 1, 7);
     root->addWidget(summaryBox);
 
-    QTabWidget* tabs = new QTabWidget(this);
+    pageTabs = new QTabWidget(this);
 
     // --- keys ---
-    QWidget* keyPage = new QWidget(tabs);
+    QWidget* keyPage = new QWidget(pageTabs);
     QVBoxLayout* keyLayout = new QVBoxLayout(keyPage);
     keyTable = new QTableWidget(keyPage);
     keyTable->setColumnCount(8);
@@ -219,15 +299,18 @@ void MfcWorkbench::buildUi()
     QPushButton* loadKeyButton = new QPushButton(tr("Load keys..."), keyPage);
     QPushButton* saveKeyButton = new QPushButton(tr("Save keys..."), keyPage);
     QPushButton* verifyButton = new QPushButton(tr("Verify known keys"), keyPage);
+    batchButton = new QPushButton(tr("Fill missing keys..."), keyPage);
+    batchButton->setObjectName("mfcBatchButton");
     keyButtons->addWidget(loadKeyButton);
     keyButtons->addWidget(saveKeyButton);
     keyButtons->addWidget(verifyButton);
+    keyButtons->addWidget(batchButton);
     keyButtons->addStretch(1);
     keyLayout->addLayout(keyButtons);
-    tabs->addTab(keyPage, tr("Keys && access"));
+    pageTabs->addTab(keyPage, tr("Keys && access"));
 
     // --- data ---
-    QWidget* dataPage = new QWidget(tabs);
+    QWidget* dataPage = new QWidget(pageTabs);
     QVBoxLayout* dataLayout = new QVBoxLayout(dataPage);
     QHBoxLayout* dataFilter = new QHBoxLayout();
     dataFilter->addWidget(new QLabel(tr("Show:"), dataPage));
@@ -237,7 +320,16 @@ void MfcWorkbench::buildUi()
     filterBox->addItem(tr("Modified"), "modified");
     filterBox->addItem(tr("Readable"), "read");
     dataFilter->addWidget(filterBox);
-    dataFilter->addStretch(1);
+    dataFilter->addWidget(new QLabel(tr("Sector:"), dataPage));
+    sectorFilter = new QComboBox(dataPage);
+    sectorFilter->setObjectName("mfcSectorFilter");
+    sectorFilter->addItem(tr("All"), -1);
+    dataFilter->addWidget(sectorFilter);
+    searchEdit = new QLineEdit(dataPage);
+    searchEdit->setObjectName("mfcSearchEdit");
+    searchEdit->setPlaceholderText(tr("Search hex or ASCII"));
+    searchEdit->setClearButtonEnabled(true);
+    dataFilter->addWidget(searchEdit, 1);
     QPushButton* readButton = new QPushButton(tr("Read missing blocks"), dataPage);
     QPushButton* readUnknownButton = new QPushButton(tr("Retry unknown blocks"), dataPage);
     QPushButton* backupButton = new QPushButton(tr("Save backup..."), dataPage);
@@ -248,36 +340,69 @@ void MfcWorkbench::buildUi()
     dataFilter->addWidget(writeButton);
     dataLayout->addLayout(dataFilter);
     dataTable = new QTableWidget(dataPage);
-    dataTable->setColumnCount(5);
+    dataTable->setObjectName("mfcDataTable");
+    dataTable->setColumnCount(6);
     dataTable->setHorizontalHeaderLabels(QStringList()
-                                         << tr("Block") << tr("Sector") << tr("Type") << tr("Data (hex)") << tr("State"));
+                                         << tr("Block") << tr("Sector") << tr("Type")
+                                         << tr("Hex") << tr("ASCII") << tr("State"));
     dataTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
     dataTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     dataTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
     dataTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
     dataTable->horizontalHeader()->setSectionResizeMode(4, QHeaderView::ResizeToContents);
+    dataTable->horizontalHeader()->setSectionResizeMode(5, QHeaderView::ResizeToContents);
     dataTable->setAlternatingRowColors(true);
+    dataTable->setSelectionBehavior(QAbstractItemView::SelectRows);
     dataTable->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-    dataLayout->addWidget(dataTable);
-    tabs->addTab(dataPage, tr("Data / backup"));
+    dataTable->setContextMenuPolicy(Qt::CustomContextMenu);
+    detailView = new QPlainTextEdit(dataPage);
+    detailView->setObjectName("mfcBlockDetails");
+    detailView->setReadOnly(true);
+    detailView->setMinimumWidth(260);
+    detailView->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    dataSplitter = new QSplitter(Qt::Horizontal, dataPage);
+    dataSplitter->addWidget(dataTable);
+    dataSplitter->addWidget(detailView);
+    dataSplitter->setStretchFactor(0, 3);
+    dataSplitter->setStretchFactor(1, 1);
+    dataLayout->addWidget(dataSplitter, 1);
+    pageTabs->addTab(dataPage, tr("Data / backup"));
 
     // --- compare ---
-    QWidget* comparePage = new QWidget(tabs);
+    QWidget* comparePage = new QWidget(pageTabs);
     QVBoxLayout* compareLayout = new QVBoxLayout(comparePage);
     QGridLayout* paths = new QGridLayout();
     compareAEdit = new QLineEdit(comparePage);
     compareBEdit = new QLineEdit(comparePage);
     QPushButton* loadAButton = new QPushButton(tr("Load A..."), comparePage);
     QPushButton* loadBButton = new QPushButton(tr("Load B..."), comparePage);
+    QPushButton* documentAButton = new QPushButton(tr("Use document"), comparePage);
+    QPushButton* documentBButton = new QPushButton(tr("Use document"), comparePage);
+    QPushButton* snapshotAButton = new QPushButton(tr("Card snapshot"), comparePage);
+    QPushButton* snapshotBButton = new QPushButton(tr("Card snapshot"), comparePage);
+    QPushButton* libraryAButton = new QPushButton(tr("Library A..."), comparePage);
+    QPushButton* libraryBButton = new QPushButton(tr("Library B..."), comparePage);
+    documentAButton->setObjectName("mfcCompareDocumentA");
+    documentBButton->setObjectName("mfcCompareDocumentB");
+    snapshotAButton->setObjectName("mfcCompareSnapshotA");
+    snapshotBButton->setObjectName("mfcCompareSnapshotB");
+    libraryAButton->setObjectName("mfcCompareLibraryA");
+    libraryBButton->setObjectName("mfcCompareLibraryB");
     QPushButton* compareButton = new QPushButton(tr("Compare A / B"), comparePage);
     QPushButton* exportButton = new QPushButton(tr("Export report..."), comparePage);
     showDiffOnlyBox = new QCheckBox(tr("Only show differences"), comparePage);
     paths->addWidget(new QLabel(tr("A:"), comparePage), 0, 0);
     paths->addWidget(compareAEdit, 0, 1);
     paths->addWidget(loadAButton, 0, 2);
+    paths->addWidget(documentAButton, 0, 3);
+    paths->addWidget(snapshotAButton, 0, 4);
+    paths->addWidget(libraryAButton, 0, 5);
     paths->addWidget(new QLabel(tr("B:"), comparePage), 1, 0);
     paths->addWidget(compareBEdit, 1, 1);
     paths->addWidget(loadBButton, 1, 2);
+    paths->addWidget(documentBButton, 1, 3);
+    paths->addWidget(snapshotBButton, 1, 4);
+    paths->addWidget(libraryBButton, 1, 5);
     paths->addWidget(showDiffOnlyBox, 2, 1);
     paths->addWidget(compareButton, 2, 2);
     paths->addWidget(exportButton, 2, 3);
@@ -293,10 +418,53 @@ void MfcWorkbench::buildUi()
     diffTable->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Stretch);
     diffTable->setAlternatingRowColors(true);
     compareLayout->addWidget(diffTable);
-    tabs->addTab(comparePage, tr("Compare"));
+    pageTabs->addTab(comparePage, tr("Compare"));
+
+    // --- continuous scan ---
+    QWidget* scanPage = new QWidget(pageTabs);
+    QVBoxLayout* scanLayout = new QVBoxLayout(scanPage);
+    QHBoxLayout* scanControls = new QHBoxLayout();
+    scanButton = new QPushButton(tr("Start continuous scan"), scanPage);
+    scanButton->setObjectName("mfcScanButton");
+    scanButton->setCheckable(true);
+    QCheckBox* autoReadBox = new QCheckBox(tr("Automatically read readable blocks"), scanPage);
+    autoReadBox->setObjectName("mfcScanAutoRead");
+    scanControls->addWidget(scanButton);
+    scanControls->addWidget(autoReadBox);
+    scanControls->addStretch(1);
+    QPushButton* scanNameButton = new QPushButton(tr("Name..."), scanPage);
+    QPushButton* scanCompareButton = new QPushButton(tr("Compare selected two"), scanPage);
+    QPushButton* scanExportButton = new QPushButton(tr("Export selected..."), scanPage);
+    QPushButton* scanRemoveButton = new QPushButton(tr("Remove result"), scanPage);
+    scanControls->addWidget(scanNameButton);
+    scanControls->addWidget(scanCompareButton);
+    scanControls->addWidget(scanExportButton);
+    scanControls->addWidget(scanRemoveButton);
+    scanLayout->addLayout(scanControls);
+    QLabel* scanHint = new QLabel(tr("Hold a card on the antenna to identify it. A card that stays in "
+                                     "place stays in the same round; removing it and presenting it "
+                                     "again starts a new round, even for the same UID."), scanPage);
+    scanHint->setWordWrap(true);
+    scanLayout->addWidget(scanHint);
+    scanTable = new QTableWidget(scanPage);
+    scanTable->setObjectName("mfcScanTable");
+    scanTable->setColumnCount(6);
+    scanTable->setHorizontalHeaderLabels(QStringList()
+                                         << tr("Round") << tr("UID") << tr("Type")
+                                         << tr("Blocks") << tr("Keys") << tr("Name"));
+    scanTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    scanTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    scanTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    scanTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+    scanTable->horizontalHeader()->setSectionResizeMode(4, QHeaderView::ResizeToContents);
+    scanTable->horizontalHeader()->setSectionResizeMode(5, QHeaderView::Stretch);
+    scanTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    scanTable->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    scanLayout->addWidget(scanTable, 1);
+    pageTabs->addTab(scanPage, tr("Continuous scan"));
 
     // --- methods ---
-    QWidget* methodPage = new QWidget(tabs);
+    QWidget* methodPage = new QWidget(pageTabs);
     QVBoxLayout* methodLayout = new QVBoxLayout(methodPage);
     adviceTable = new QTableWidget(methodPage);
     adviceTable->setColumnCount(4);
@@ -360,18 +528,18 @@ void MfcWorkbench::buildUi()
     controls->addWidget(runButton, 4, 1);
     controls->addWidget(cancelButton, 4, 2);
     methodLayout->addLayout(controls);
-    tabs->addTab(methodPage, tr("Key recovery / decryption"));
-    tabs->setObjectName("mfcTabs");
+    pageTabs->addTab(methodPage, tr("Key recovery / decryption"));
+    pageTabs->setObjectName("mfcTabs");
     // Switching to the recovery page is an implicit "what does this card
     // allow?" check.  Run the keyless nonce diagnostic so the applicability
     // table starts from evidence instead of "unknown (run diagnostics)".
-    connect(tabs, &QTabWidget::currentChanged, this, [this, tabs, methodPage](int) {
-        if(tabs->currentWidget() != methodPage)
+    connect(pageTabs, &QTabWidget::currentChanged, this, [this, methodPage](int) {
+        if(pageTabs->currentWidget() != methodPage)
             return;
         diagnoseNonceOnOpen();
     });
 
-    root->addWidget(tabs, 1);
+    root->addWidget(pageTabs, 1);
 
     logEdit = new QPlainTextEdit(this);
     logEdit->setReadOnly(true);
@@ -430,12 +598,162 @@ void MfcWorkbench::buildUi()
     connect(applyButton, &QPushButton::clicked, this, &MfcWorkbench::applyToMifare);
     connect(loadAButton, &QPushButton::clicked, this, &MfcWorkbench::loadCompareA);
     connect(loadBButton, &QPushButton::clicked, this, &MfcWorkbench::loadCompareB);
+    connect(documentAButton, &QPushButton::clicked, this, [this]() {
+        compareA = doc;
+        hasCompareA = true;
+        compareAEdit->setText(tr("Current document (%1)").arg(tabs.value(activeIndex).name));
+    });
+    connect(documentBButton, &QPushButton::clicked, this, [this]() {
+        compareB = doc;
+        hasCompareB = true;
+        compareBEdit->setText(tr("Current document (%1)").arg(tabs.value(activeIndex).name));
+    });
+    connect(snapshotAButton, &QPushButton::clicked, this, [this]() {
+        compareA = snapshotDocument();
+        hasCompareA = true;
+        compareAEdit->setText(tr("Card %1 snapshot %2 (%3 block(s))")
+                              .arg(compareA.uid, QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"))
+                              .arg(compareA.completeBlockCount()));
+    });
+    connect(snapshotBButton, &QPushButton::clicked, this, [this]() {
+        compareB = snapshotDocument();
+        hasCompareB = true;
+        compareBEdit->setText(tr("Card %1 snapshot %2 (%3 block(s))")
+                              .arg(compareB.uid, QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"))
+                              .arg(compareB.completeBlockCount()));
+    });
+    connect(libraryAButton, &QPushButton::clicked, this, [this]() {
+        QString error;
+        if(!loadCompareFromLibrary(true, &error))
+            QMessageBox::information(this, tr("Compare"), error);
+    });
+    connect(libraryBButton, &QPushButton::clicked, this, [this]() {
+        QString error;
+        if(!loadCompareFromLibrary(false, &error))
+            QMessageBox::information(this, tr("Compare"), error);
+    });
     connect(compareButton, &QPushButton::clicked, this, &MfcWorkbench::compareDocuments);
     connect(exportButton, &QPushButton::clicked, this, &MfcWorkbench::exportCompareReport);
     connect(showDiffOnlyBox, &QCheckBox::stateChanged, this, &MfcWorkbench::refreshDiffTable);
     connect(clearLogButton, &QPushButton::clicked, logEdit, &QPlainTextEdit::clear);
     connect(keyTable, &QTableWidget::itemChanged, this, &MfcWorkbench::onKeyItemChanged);
     connect(dataTable, &QTableWidget::itemChanged, this, &MfcWorkbench::onDataItemChanged);
+    connect(docTabBar, &QTabBar::currentChanged, this, &MfcWorkbench::documentTabChanged);
+    connect(docTabBar, &QTabBar::tabCloseRequested, this, &MfcWorkbench::documentTabCloseRequested);
+    connect(docTabBar, &QTabBar::customContextMenuRequested, this, &MfcWorkbench::documentTabContextMenu);
+    connect(batchButton, &QPushButton::clicked, this, &MfcWorkbench::startBatchFromDialog);
+    connect(scanButton, &QPushButton::toggled, this, &MfcWorkbench::scanToggled);
+    connect(autoReadBox, &QCheckBox::toggled, this, [this](bool on) { scanAutoRead = on; });
+    connect(scanTable, &QTableWidget::itemSelectionChanged, this, &MfcWorkbench::scanItemChanged);
+    connect(scanNameButton, &QPushButton::clicked, this, [this]() {
+        const QModelIndexList rows = scanTable->selectionModel() ? scanTable->selectionModel()->selectedRows() : QModelIndexList();
+        if(rows.size() != 1)
+        {
+            setStatus(tr("Select exactly one scan result to name it"));
+            return;
+        }
+        const int index = scanTable->item(rows.first().row(), 0)->data(Qt::UserRole).toInt();
+        if(index < 0 || index >= tabs.size())
+            return;
+        bool ok = false;
+        const QString name = QInputDialog::getText(this, tr("Name scan result"), tr("Name:"),
+                                                   QLineEdit::Normal, tabs[index].name, &ok);
+        if(ok && !name.trimmed().isEmpty())
+        {
+            tabs[index].name = name.trimmed();
+            refreshDocumentTabs();
+            refreshScanList();
+        }
+    });
+    connect(scanCompareButton, &QPushButton::clicked, this, [this]() {
+        QList<int> selected;
+        for(const QModelIndex& index : scanTable->selectionModel()->selectedRows())
+            selected << scanTable->item(index.row(), 0)->data(Qt::UserRole).toInt();
+        if(selected.size() != 2)
+        {
+            setStatus(tr("Select exactly two scan results to compare"));
+            return;
+        }
+        compareA = tabs.at(selected.at(0)).document;
+        compareB = tabs.at(selected.at(1)).document;
+        hasCompareA = true;
+        hasCompareB = true;
+        compareAEdit->setText(tabs.at(selected.at(0)).name);
+        compareBEdit->setText(tabs.at(selected.at(1)).name);
+        comparison = compareA.compare(compareB);
+        refreshDiffTable();
+        pageTabs->setCurrentIndex(2);
+    });
+    connect(scanExportButton, &QPushButton::clicked, this, [this]() {
+        QList<int> selected;
+        for(const QModelIndex& index : scanTable->selectionModel()->selectedRows())
+            selected << scanTable->item(index.row(), 0)->data(Qt::UserRole).toInt();
+        if(selected.isEmpty())
+        {
+            setStatus(tr("Select at least one scan result"));
+            return;
+        }
+        const QString directory = QFileDialog::getExistingDirectory(this, tr("Export scan results"));
+        if(directory.isEmpty())
+            return;
+        int written = 0;
+        for(int index : selected)
+        {
+            const QString name = QDir(directory).filePath(
+                                     QStringLiteral("%1.eml").arg(tabs.at(index).name.isEmpty()
+                                                                 ? QStringLiteral("scan") : tabs.at(index).name));
+            const Mfc::IoResult result = tabs.at(index).document.saveDataFile(name, QStringLiteral("eml"));
+            if(result.ok)
+                written++;
+            else
+                logLine(tr("Export %1: %2").arg(name, result.error));
+        }
+        setStatus(tr("Exported %1 of %2 scan result(s)").arg(written).arg(selected.size()));
+    });
+    connect(scanRemoveButton, &QPushButton::clicked, this, [this]() {
+        const QModelIndexList rows = scanTable->selectionModel() ? scanTable->selectionModel()->selectedRows() : QModelIndexList();
+        if(rows.isEmpty())
+            return;
+        QList<int> indices;
+        for(const QModelIndex& index : rows)
+            indices << scanTable->item(index.row(), 0)->data(Qt::UserRole).toInt();
+        std::sort(indices.begin(), indices.end(), std::greater<int>());
+        for(int index : indices)
+            closeDocument(index);
+        refreshScanList();
+    });
+    connect(keySummary, &QLabel::linkActivated, this, &MfcWorkbench::linkActivated);
+    connect(blockSummary, &QLabel::linkActivated, this, &MfcWorkbench::linkActivated);
+    connect(dataTable, &QTableWidget::itemSelectionChanged, this, &MfcWorkbench::refreshBlockDetails);
+    connect(dataTable, &QTableWidget::customContextMenuRequested, this, [this](const QPoint& pos) {
+        QMenu menu(this);
+        menu.addAction(tr("Copy hex"), this, &MfcWorkbench::copyBlockHex);
+        menu.addAction(tr("Paste rows"), this, &MfcWorkbench::pasteBlocks);
+        menu.addAction(tr("Export selected blocks..."), this, &MfcWorkbench::exportSelectedBlocks);
+        menu.addSeparator();
+        menu.addAction(tr("Show sector in key table"), this, [this]() {
+            const int block = dataTable->currentItem() ? dataTable->currentItem()->data(Qt::UserRole).toInt() : -1;
+            if(block < 0)
+                return;
+            const int sector = doc.spec().sectorOfBlock(block);
+            keyTable->selectRow(sector);
+            pageTabs->setCurrentIndex(0);
+        });
+        menu.exec(dataTable->viewport()->mapToGlobal(pos));
+    });
+    QAction* undoAction = new QAction(tr("Undo edit"), this);
+    undoAction->setShortcut(QKeySequence::Undo);
+    undoAction->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    connect(undoAction, &QAction::triggered, this, &MfcWorkbench::undoDocument);
+    addAction(undoAction);
+    QAction* redoAction = new QAction(tr("Redo edit"), this);
+    redoAction->setShortcut(QKeySequence::Redo);
+    redoAction->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    connect(redoAction, &QAction::triggered, this, &MfcWorkbench::redoDocument);
+    addAction(redoAction);
+    connect(searchEdit, &QLineEdit::textChanged, this, &MfcWorkbench::onFilterChanged);
+    connect(sectorFilter, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &MfcWorkbench::onFilterChanged);
 }
 
 void MfcWorkbench::setConfigMap(const QVariantMap& config)
@@ -443,6 +761,572 @@ void MfcWorkbench::setConfigMap(const QVariantMap& config)
     configMap = config;
     refreshAdvice();
 }
+
+void MfcWorkbench::updateWindowTitle()
+{
+    if(activeIndex < 0 || activeIndex >= tabs.size())
+    {
+        setWindowTitle(tr("MFC workbench"));
+        return;
+    }
+    setWindowTitle(tr("%1%2 - MFC workbench")
+                   .arg(tabs.at(activeIndex).dirty ? QStringLiteral("* ") : QString(),
+                        tabs.at(activeIndex).name));
+}
+
+void MfcWorkbench::refreshDocumentTabs()
+{
+    if(docTabBar == nullptr)
+        return;
+    const QSignalBlocker blocker(docTabBar);
+    while(docTabBar->count() > 0)
+        docTabBar->removeTab(0);
+    for(int i = 0; i < tabs.size(); i++)
+    {
+        QString name = tabs.at(i).name;
+        if(name.isEmpty())
+            name = tr("Document");
+        if(tabs.at(i).dirty)
+            name = QStringLiteral("* ") + name;
+        const int index = docTabBar->addTab(name);
+        docTabBar->setTabToolTip(index, tr("%1 - source: %2%3")
+                                 .arg(tabs.at(i).name, tabs.at(i).sourceKind,
+                                      tabs.at(i).sourcePath.isEmpty() ? QString()
+                                      : QStringLiteral(" - ") + tabs.at(i).sourcePath));
+    }
+    if(activeIndex >= 0 && activeIndex < docTabBar->count())
+        docTabBar->setCurrentIndex(activeIndex);
+    if(docMenuButton != nullptr)
+        docMenuButton->setText(tr("Document (%1)").arg(tabs.size()));
+    updateWindowTitle();
+}
+
+void MfcWorkbench::saveActiveView()
+{
+    if(activeIndex < 0 || activeIndex >= tabs.size())
+        return;
+    DocumentTab& tab = tabs[activeIndex];
+    tab.document = doc;
+    tab.scroll = dataTable != nullptr ? dataTable->verticalScrollBar()->value() : 0;
+    QTableWidgetItem* item = dataTable != nullptr ? dataTable->currentItem() : nullptr;
+    tab.selectedBlock = item != nullptr ? item->data(Qt::UserRole).toInt() : -1;
+    tab.filterData = filterBox != nullptr ? filterBox->currentData().toString() : QStringLiteral("all");
+    tab.search = searchEdit != nullptr ? searchEdit->text() : QString();
+}
+
+void MfcWorkbench::loadActiveDocument()
+{
+    if(activeIndex < 0 || activeIndex >= tabs.size())
+        return;
+    const DocumentTab& tab = tabs.at(activeIndex);
+    doc = tab.document;
+    updatingTables = true;
+    if(cardTypeBox != nullptr)
+        cardTypeBox->setCurrentIndex(cardTypeBox->findData(typeToInt(doc.cardType())));
+    if(filterBox != nullptr)
+    {
+        const int filterIndex = filterBox->findData(tab.filterData);
+        filterBox->setCurrentIndex(filterIndex >= 0 ? filterIndex : 0);
+    }
+    if(searchEdit != nullptr)
+        searchEdit->setText(tab.search);
+    updatingTables = false;
+    refreshKeyTable();
+    refreshDataTable();
+    refreshAdvice();
+    refreshSummary();
+    if(dataTable != nullptr)
+        dataTable->verticalScrollBar()->setValue(tab.scroll);
+    if(tab.selectedBlock >= 0)
+        locateBlock(tab.selectedBlock);
+    updateWindowTitle();
+}
+
+int MfcWorkbench::addDocument(const Mfc::Document& document, const QString& name,
+                              const QString& sourceKind, const QString& sourcePath)
+{
+    saveActiveView();
+    DocumentTab tab;
+    tab.document = document;
+    tab.name = name;
+    tab.sourceKind = sourceKind;
+    tab.sourcePath = sourcePath;
+    tab.filterData = QStringLiteral("all");
+    tabs.append(tab);
+    activeIndex = tabs.size() - 1;
+    doc = document;
+    updatingTables = true;
+    if(cardTypeBox != nullptr)
+        cardTypeBox->setCurrentIndex(cardTypeBox->findData(typeToInt(doc.cardType())));
+    updatingTables = false;
+    refreshDocumentTabs();
+    refreshKeyTable();
+    refreshDataTable();
+    refreshAdvice();
+    refreshSummary();
+    emit documentActivated(doc, name, sourceKind);
+    return activeIndex;
+}
+
+void MfcWorkbench::documentTabChanged(int index)
+{
+    if(updatingTables || index < 0 || index >= tabs.size() || index == activeIndex)
+        return;
+    // A synchronous read/verify loop mutates `doc` between event loops, so a
+    // tab switch would redirect its results.  An asynchronous task only writes
+    // on completion; switching is safe there and the result is routed back to
+    // the tab that started it.
+    if(taskRunning && !util->isCommandActive())
+    {
+        const QSignalBlocker blocker(docTabBar);
+        docTabBar->setCurrentIndex(activeIndex);
+        setStatus(tr("Finish or stop the running read/verify loop before switching documents"));
+        return;
+    }
+    saveActiveView();
+    activeIndex = index;
+    loadActiveDocument();
+}
+
+void MfcWorkbench::activateDocument(int index)
+{
+    documentTabChanged(index);
+}
+
+QString MfcWorkbench::documentTabName(int index) const
+{
+    return index >= 0 && index < tabs.size() ? tabs.at(index).name : QString();
+}
+
+QString MfcWorkbench::documentTabSource(int index) const
+{
+    return index >= 0 && index < tabs.size() ? tabs.at(index).sourceKind : QString();
+}
+
+bool MfcWorkbench::documentTabDirty(int index) const
+{
+    return index >= 0 && index < tabs.size() && tabs.at(index).dirty;
+}
+
+void MfcWorkbench::documentTabCloseRequested(int index)
+{
+    closeDocument(index);
+}
+
+void MfcWorkbench::documentTabContextMenu(const QPoint& pos)
+{
+    QMenu menu(this);
+    menu.addAction(tr("New document"), this, &MfcWorkbench::newDocumentTab);
+    menu.addAction(tr("Open dump..."), this, &MfcWorkbench::openDocumentTab);
+    menu.addAction(tr("Save document..."), this, &MfcWorkbench::saveCurrentDocument);
+    menu.addSeparator();
+    const int index = docTabBar->tabAt(pos);
+    if(index >= 0)
+    {
+        menu.addAction(tr("Rename \"%1\"...").arg(tabs.at(index).name), this, &MfcWorkbench::renameCurrentDocument);
+        menu.addAction(tr("Close \"%1\"").arg(tabs.at(index).name), this, [this, index]() {
+            closeDocument(index);
+        });
+    }
+    menu.exec(docTabBar->mapToGlobal(pos));
+}
+
+void MfcWorkbench::newDocumentTab()
+{
+    Mfc::Document fresh(doc.cardType());
+    addDocument(fresh, tr("Document %1").arg(tabs.size() + 1), QStringLiteral("new"));
+    setStatus(tr("New document"));
+}
+
+void MfcWorkbench::openDocumentTab()
+{
+    const QString filename = QFileDialog::getOpenFileName(
+                                 this, tr("Open MIFARE Classic dump"), QString(),
+                                 tr("Dumps (*.bin *.dump *.eml *.txt *.json);;All files (*)"));
+    if(filename.isEmpty())
+        return;
+    QString error;
+    if(!openDocumentFile(filename, &error))
+        QMessageBox::information(this, tr("Info"), error);
+}
+
+bool MfcWorkbench::openDocumentFile(const QString& filename, QString* error)
+{
+    const int existing = indexOfDocumentFile(filename);
+    if(existing >= 0)
+    {
+        activateDocument(existing);
+        return true;
+    }
+    Mfc::Document loaded;
+    const Mfc::IoResult result = Mfc::Document::loadDataFile(filename, QStringLiteral("auto"), &loaded);
+    if(!result.ok)
+    {
+        if(error != nullptr)
+            *error = result.error;
+        return false;
+    }
+    addDocument(loaded, QFileInfo(filename).completeBaseName(), QStringLiteral("file"), filename);
+    setStatus(tr("Opened %1").arg(filename));
+    return true;
+}
+
+int MfcWorkbench::indexOfDocumentFile(const QString& filename) const
+{
+    const QString clean = QFileInfo(filename).absoluteFilePath();
+    for(int i = 0; i < tabs.size(); i++)
+        if(!tabs.at(i).sourcePath.isEmpty()
+           && QFileInfo(tabs.at(i).sourcePath).absoluteFilePath() == clean)
+            return i;
+    return -1;
+}
+
+void MfcWorkbench::closeDocument(int index)
+{
+    if(index < 0 || index >= tabs.size())
+        return;
+    if(tabs.size() == 1)
+    {
+        // Never leave the workbench without a document: reset the only tab.
+        doc = Mfc::Document(doc.cardType());
+        nonce = MfcRecovery::NonceType::Unknown;
+        tabs[0].document = doc;
+        tabs[0].name = tr("Document 1");
+        tabs[0].sourceKind = QStringLiteral("new");
+        tabs[0].sourcePath.clear();
+        tabs[0].dirty = false;
+        tabs[0].undo.clear();
+        tabs[0].redo.clear();
+        activeIndex = 0;
+        loadActiveDocument();
+        refreshDocumentTabs();
+        return;
+    }
+    if(tabs.at(index).dirty)
+    {
+        QMessageBox box(this);
+        box.setWindowTitle(tr("Close document"));
+        box.setText(tr("\"%1\" has unsaved changes.").arg(tabs.at(index).name));
+        box.setInformativeText(tr("Save it before closing?"));
+        QPushButton* save = box.addButton(tr("Save"), QMessageBox::AcceptRole);
+        QPushButton* discard = box.addButton(tr("Discard"), QMessageBox::DestructiveRole);
+        box.addButton(QMessageBox::Cancel);
+        box.exec();
+        if(box.clickedButton() == save)
+        {
+            activateDocument(index);
+            saveCurrentDocument();
+            if(tabs.at(index).dirty)
+                return;
+        }
+        else if(box.clickedButton() != discard)
+            return;
+    }
+    if(!tabs.at(index).draftId.isEmpty())
+        drafts.remove(tabs.at(index).draftId);
+    tabs.removeAt(index);
+    if(activeIndex > index)
+        activeIndex--;
+    else if(activeIndex == index)
+        activeIndex = qMin(index, tabs.size() - 1);
+    loadActiveDocument();
+    refreshDocumentTabs();
+}
+
+void MfcWorkbench::closeCurrentDocument()
+{
+    closeDocument(activeIndex);
+}
+
+void MfcWorkbench::renameCurrentDocument()
+{
+    if(activeIndex < 0)
+        return;
+    bool ok = false;
+    const QString name = QInputDialog::getText(this, tr("Rename document"), tr("Name:"),
+                                               QLineEdit::Normal, tabs.at(activeIndex).name, &ok);
+    if(!ok || name.trimmed().isEmpty())
+        return;
+    tabs[activeIndex].name = name.trimmed();
+    markDirty();
+    refreshDocumentTabs();
+}
+
+void MfcWorkbench::saveCurrentDocument()
+{
+    if(activeIndex < 0)
+        return;
+    const QString defaultName = QStringLiteral("%1.json")
+                                .arg(tabs.at(activeIndex).name.isEmpty()
+                                     ? QStringLiteral("mfc") : tabs.at(activeIndex).name);
+    const QString filename = QFileDialog::getSaveFileName(
+                                 this, tr("Save MIFARE Classic document"), defaultName,
+                                 tr("JSON document (*.json);;Text EML (*.eml);;Raw binary (*.bin)"));
+    if(filename.isEmpty())
+        return;
+    QString format = QStringLiteral("json");
+    if(filename.endsWith(QStringLiteral(".eml"), Qt::CaseInsensitive)
+       || filename.endsWith(QStringLiteral(".txt"), Qt::CaseInsensitive))
+        format = QStringLiteral("eml");
+    else if(filename.endsWith(QStringLiteral(".bin"), Qt::CaseInsensitive)
+            || filename.endsWith(QStringLiteral(".dump"), Qt::CaseInsensitive))
+        format = QStringLiteral("bin");
+    bool allowUnknown = false;
+    if(format == QStringLiteral("bin") && doc.unknownBlockCount() > 0)
+    {
+        if(QMessageBox::warning(this, tr("Incomplete document"),
+                                tr("%1 block(s) are unknown; a binary file uses 00 for them. Continue?")
+                                .arg(doc.unknownBlockCount()),
+                                QMessageBox::Yes | QMessageBox::No) != QMessageBox::Yes)
+            return;
+        allowUnknown = true;
+    }
+    const Mfc::IoResult saved = doc.saveDataFile(filename, format, allowUnknown);
+    if(!saved.ok)
+    {
+        QMessageBox::information(this, tr("Info"), saved.error);
+        return;
+    }
+    if(!saved.warning.isEmpty())
+        logLine(saved.warning);
+    tabs[activeIndex].sourcePath = filename;
+    tabs[activeIndex].sourceKind = QStringLiteral("file");
+    tabs[activeIndex].name = QFileInfo(filename).completeBaseName();
+    tabs[activeIndex].dirty = false;
+    if(!tabs.at(activeIndex).draftId.isEmpty())
+    {
+        drafts.remove(tabs.at(activeIndex).draftId);
+        tabs[activeIndex].draftId.clear();
+    }
+    refreshDocumentTabs();
+    setStatus(tr("Saved %1").arg(filename));
+}
+
+void MfcWorkbench::setDraftStoreDir(const QString& dir)
+{
+    drafts.setDir(dir);
+    QString error;
+    if(!drafts.load(&error) && !error.isEmpty())
+        logLine(error);
+    refreshDocumentTabs();
+}
+
+void MfcWorkbench::flushDrafts()
+{
+    if(!drafts.isEnabled())
+        return;
+    bool saved = false;
+    for(int i = 0; i < tabs.size(); i++)
+    {
+        if(!tabs.at(i).dirty)
+            continue;
+        if(i == activeIndex)
+            tabs[i].document = doc;
+        QString id;
+        QString error;
+        if(drafts.save(tabs.at(i).document, tabs.at(i).draftId, tabs.at(i).name,
+                       tabs.at(i).sourceKind, targetSession, &id, &error))
+        {
+            tabs[i].draftId = id;
+            saved = true;
+        }
+        else if(!error.isEmpty())
+            logLine(error);
+    }
+    if(saved)
+        setStatus(tr("Draft saved"));
+}
+
+void MfcWorkbench::restoreDraftDialog()
+{
+    QString error;
+    drafts.load(&error);
+    if(drafts.drafts().isEmpty())
+    {
+        QMessageBox::information(this, tr("Restore draft"),
+                                 error.isEmpty() ? tr("There is no saved draft.")
+                                                 : error);
+        return;
+    }
+    QStringList labels;
+    for(const Mfc::DraftInfo& info : drafts.drafts())
+        labels << tr("%1 - %2 - %3 - %4 block(s)")
+                  .arg(info.name.isEmpty() ? tr("Draft") : info.name,
+                       info.uid.isEmpty() ? tr("no UID") : info.uid,
+                       info.savedAt.toString(QStringLiteral("yyyy-MM-dd HH:mm")),
+                       QString::number(info.completeBlocks));
+    bool ok = false;
+    const QString selected = QInputDialog::getItem(this, tr("Restore draft"), tr("Draft:"),
+                                                   labels, 0, false, &ok);
+    if(!ok || selected.isEmpty())
+        return;
+    const int index = labels.indexOf(selected);
+    if(index < 0)
+        return;
+    if(!restoreDraft(drafts.drafts().at(index).id, &error))
+        QMessageBox::information(this, tr("Restore draft"), error);
+}
+
+bool MfcWorkbench::restoreDraft(const QString& id, QString* error)
+{
+    Mfc::Document loaded;
+    Mfc::DraftInfo info;
+    if(!drafts.load(id, &loaded, &info, error))
+        return false;
+    addDocument(loaded, info.name.isEmpty() ? tr("Restored draft") : info.name,
+                QStringLiteral("draft"));
+    drafts.remove(id);
+    // The session ids in a draft are historical: they were produced by an
+    // earlier connection and never prove anything about the card in the field.
+    targetPresent = deviceReady;
+    targetUidValue.clear();
+    targetSession = ++sessionSeq;
+    refreshSummary();
+    setStatus(tr("Draft restored; its RF evidence is historical. Identify the card before reading or writing."));
+    return true;
+}
+
+void MfcWorkbench::pushUndo()
+{
+    if(activeIndex < 0 || activeIndex >= tabs.size())
+        return;
+    tabs[activeIndex].document = doc;
+    tabs[activeIndex].undo.append(doc);
+    if(tabs[activeIndex].undo.size() > 50)
+        tabs[activeIndex].undo.removeFirst();
+    tabs[activeIndex].redo.clear();
+}
+
+void MfcWorkbench::markDirty()
+{
+    if(activeIndex < 0 || activeIndex >= tabs.size())
+        return;
+    tabs[activeIndex].dirty = true;
+    refreshDocumentTabs();
+}
+
+void MfcWorkbench::setTabDirty(bool dirty)
+{
+    if(activeIndex < 0 || activeIndex >= tabs.size())
+        return;
+    tabs[activeIndex].dirty = dirty;
+    refreshDocumentTabs();
+}
+
+bool MfcWorkbench::undoDocument()
+{
+    if(activeIndex < 0 || tabs.at(activeIndex).undo.isEmpty())
+        return false;
+    tabs[activeIndex].redo.append(doc);
+    doc = tabs[activeIndex].undo.takeLast();
+    tabs[activeIndex].document = doc;
+    updatingTables = true;
+    cardTypeBox->setCurrentIndex(cardTypeBox->findData(typeToInt(doc.cardType())));
+    updatingTables = false;
+    markDirty();
+    refreshKeyTable();
+    refreshDataTable();
+    refreshAdvice();
+    refreshSummary();
+    applyToMifare();
+    setStatus(tr("Undone"));
+    return true;
+}
+
+bool MfcWorkbench::redoDocument()
+{
+    if(activeIndex < 0 || tabs.at(activeIndex).redo.isEmpty())
+        return false;
+    tabs[activeIndex].undo.append(doc);
+    doc = tabs[activeIndex].redo.takeLast();
+    tabs[activeIndex].document = doc;
+    updatingTables = true;
+    cardTypeBox->setCurrentIndex(cardTypeBox->findData(typeToInt(doc.cardType())));
+    updatingTables = false;
+    markDirty();
+    refreshKeyTable();
+    refreshDataTable();
+    refreshAdvice();
+    refreshSummary();
+    applyToMifare();
+    setStatus(tr("Redone"));
+    return true;
+}
+
+void MfcWorkbench::locateBlock(int block)
+{
+    if(block < 0 || dataTable == nullptr)
+        return;
+    for(int row = 0; row < dataTable->rowCount(); row++)
+    {
+        QTableWidgetItem* item = dataTable->item(row, 0);
+        if(item != nullptr && item->data(Qt::UserRole).toInt() == block)
+        {
+            dataTable->selectRow(row);
+            dataTable->scrollToItem(item, QAbstractItemView::PositionAtCenter);
+            refreshBlockDetails();
+            return;
+        }
+    }
+    updatingTables = true;
+    filterBox->setCurrentIndex(0);
+    if(sectorFilter != nullptr)
+        sectorFilter->setCurrentIndex(0);
+    if(searchEdit != nullptr)
+        searchEdit->clear();
+    updatingTables = false;
+    refreshDataTable();
+    for(int row = 0; row < dataTable->rowCount(); row++)
+    {
+        QTableWidgetItem* item = dataTable->item(row, 0);
+        if(item != nullptr && item->data(Qt::UserRole).toInt() == block)
+        {
+            dataTable->selectRow(row);
+            dataTable->scrollToItem(item, QAbstractItemView::PositionAtCenter);
+            refreshBlockDetails();
+            return;
+        }
+    }
+}
+
+void MfcWorkbench::linkActivated(const QString& link)
+{
+    if(link == QStringLiteral("missing-keys"))
+    {
+        for(int sector = 0; sector < doc.sectorCount(); sector++)
+        {
+            if(doc.key(sector, 'A').verifiedIn(targetSession)
+               && doc.key(sector, 'B').verifiedIn(targetSession))
+                continue;
+            keyTable->selectRow(sector);
+            keyTable->scrollToItem(keyTable->item(sector, 0), QAbstractItemView::PositionAtCenter);
+            pageTabs->setCurrentIndex(0);
+            setStatus(tr("Sector %1 still misses a verified key").arg(sector));
+            return;
+        }
+        setStatus(tr("Every sector has both keys verified in this session"));
+        return;
+    }
+    if(link == QStringLiteral("missing-blocks"))
+    {
+        for(int block = 0; block < doc.blockCount(); block++)
+        {
+            if(doc.blockComplete(block))
+                continue;
+            locateBlock(block);
+            setStatus(tr("Block %1 was not read").arg(block));
+            return;
+        }
+        setStatus(tr("Every block is readable"));
+        return;
+    }
+    if(link.startsWith(QStringLiteral("sector:")))
+    {
+        const int sector = link.mid(7).toInt();
+        locateBlock(doc.spec().firstBlockOfSector(sector));
+    }
+}
+
 
 void MfcWorkbench::suspendSessionForOneShot()
 {
@@ -455,6 +1339,17 @@ void MfcWorkbench::suspendSessionForOneShot()
 void MfcWorkbench::setDeviceReady(bool ready)
 {
     deviceReady = ready;
+    if(ready && Util::isDemoMode())
+    {
+        targetSession = Demo::Provider::kDemoSession;
+        sessionSeq = qMax(sessionSeq, targetSession);
+        targetPresent = true;
+        targetUidValue = QString::fromLatin1(Demo::Provider::kDemoUid);
+        targetType = doc.cardType();
+        refreshIdentity();
+        refreshSummary();
+        return;
+    }
     if(ready)
     {
         if(oneShotSessionPending)
@@ -533,6 +1428,17 @@ bool MfcWorkbench::applyCardIdentity(const QString& uid, Mfc::CardType type, QSt
     }
     targetUidValue = normalized;
     targetType = type;
+    if(Util::isDemoMode() && doc.completeBlockCount() == 0 && doc.verifiedKeyCount() == 0)
+    {
+        // The demonstration card is a normal document: identify loads it, and
+        // every later action goes through the normal workbench paths.
+        doc = Demo::Provider::instance().card();
+        doc.uid = normalized;
+        doc.sourceFile = QStringLiteral("demo");
+            updatingTables = true;
+        cardTypeBox->setCurrentIndex(cardTypeBox->findData(typeToInt(doc.cardType())));
+        updatingTables = false;
+    }
     // Same card (or an empty document): adopt the identity.  A different card
     // keeps the old document intact and must be resolved by the user.
     if(doc.uid.isEmpty() || doc.uid.compare(normalized, Qt::CaseInsensitive) == 0)
@@ -577,7 +1483,13 @@ bool MfcWorkbench::startNewDocumentForTarget(QString* error)
             *error = tr("Identify the card first");
         return false;
     }
-    doc = Mfc::Document(targetType);
+    if(Util::isDemoMode())
+    {
+        doc = Demo::Provider::instance().card();
+        doc.uid = targetUidValue;
+    }
+    else
+        doc = Mfc::Document(targetType);
     doc.uid = targetUidValue;
     nonce = MfcRecovery::NonceType::Unknown;
     updatingTables = true;
@@ -624,6 +1536,11 @@ void MfcWorkbench::importFromMifare()
             loaded.setKey(s, 'B', b, Mfc::KeyState::Pending, Mfc::KeySource::Manual);
     }
     doc = loaded;
+    if(activeIndex >= 0 && activeIndex < tabs.size())
+    {
+        tabs[activeIndex].document = doc;
+        tabs[activeIndex].dirty = true;
+    }
     nonce = MfcRecovery::NonceType::Unknown;
     updatingTables = true;
     cardTypeBox->setCurrentIndex(cardTypeBox->findData(typeToInt(doc.cardType())));
@@ -686,17 +1603,78 @@ void MfcWorkbench::refreshSummary()
     uidLabel->setText(doc.uid.isEmpty() ? tr("(not read)") : doc.uid);
     nonceLabel->setText(nonceText());
     const int current = targetSession == 0 ? 0 : doc.verifiedKeyCountIn(targetSession);
-    keySummary->setText(tr("Verified keys %1/%2 in this session | historical %3 | pending %4 | unknown %5")
+    keySummary->setText(tr("Verified keys %1/%2 in this session | historical %3 | pending %4 | unknown %5"
+                           "<br/><a href=\"missing-keys\">Locate the first missing key</a>")
                         .arg(current).arg(doc.keyCount())
                         .arg(doc.verifiedKeyCount() - current)
                         .arg(doc.pendingKeyCount()).arg(doc.unknownKeyCount()));
-    blockSummary->setText(tr("Read blocks %1/%2 | unknown %3 | modified %4")
+    blockSummary->setText(tr("Read blocks %1/%2 | unknown %3 | modified %4"
+                             "<br/><a href=\"missing-blocks\">Locate the first unread block</a>")
                           .arg(doc.completeBlockCount()).arg(doc.blockCount())
                           .arg(doc.unknownBlockCount()).arg(doc.modifiedBlockCount()));
+    if(batchRunning)
+    {
+        const MfcBatch::Progress progressValue = batchPlan.progress();
+        batchLabel->setText(tr("Batch: %1 | processed %2/%3 | verified %4 | missing %5 | failed %6")
+                            .arg(batchCurrent >= 0 && batchCurrent < batchPlan.size()
+                                 ? MfcBatch::Plan::describe(batchPlan.items().at(batchCurrent))
+                                 : tr("idle"))
+                            .arg(progressValue.processed).arg(progressValue.total)
+                            .arg(progressValue.verified).arg(progressValue.missing)
+                            .arg(progressValue.failed));
+    }
+    else if(!batchLabel->text().isEmpty() && !taskRunning)
+        batchLabel->setText(QString());
     if(!taskRunning)
         stageLabel->setText(tr("Idle"));
     runButton->setEnabled(deviceReady && !taskRunning && !planBusy);
     cancelButton->setEnabled(taskRunning);
+    emit identityChanged(doc.uid, doc.cardDisplayName(),
+                         tabs.value(activeIndex).name);
+}
+
+QByteArray MfcWorkbench::viewState() const
+{
+    QByteArray state;
+    QDataStream stream(&state, QIODevice::WriteOnly);
+    stream << dataTable->horizontalHeader()->saveState()
+           << dataSplitter->saveState()
+           << (pageTabs != nullptr ? pageTabs->currentIndex() : 0)
+           << (logEdit != nullptr ? logEdit->height() : 0);
+    return state;
+}
+
+void MfcWorkbench::setViewState(const QByteArray& state)
+{
+    if(state.isEmpty())
+        return;
+    QDataStream stream(state);
+    QByteArray header;
+    QByteArray splitter;
+    int page = 0;
+    int logHeight = 0;
+    stream >> header >> splitter >> page >> logHeight;
+    if(!header.isEmpty())
+        dataTable->horizontalHeader()->restoreState(header);
+    if(!splitter.isEmpty())
+        dataSplitter->restoreState(splitter);
+    if(pageTabs != nullptr && page >= 0 && page < pageTabs->count())
+        pageTabs->setCurrentIndex(page);
+    if(logHeight > 0 && logEdit != nullptr)
+        logEdit->setMaximumHeight(logHeight);
+}
+
+void MfcWorkbench::setCompareDocuments(const Mfc::Document& a, const Mfc::Document& b,
+                                       const QString& nameA, const QString& nameB)
+{
+    compareA = a;
+    compareB = b;
+    hasCompareA = true;
+    hasCompareB = true;
+    compareAEdit->setText(nameA.isEmpty() ? tr("document A") : nameA);
+    compareBEdit->setText(nameB.isEmpty() ? tr("document B") : nameB);
+    comparison = compareA.compare(compareB);
+    refreshDiffTable();
 }
 
 QString MfcWorkbench::nonceText() const
@@ -785,18 +1763,32 @@ void MfcWorkbench::refreshKeyTable()
 void MfcWorkbench::refreshDataTable()
 {
     updatingTables = true;
+    int selected = -1;
+    if(dataTable->currentItem() != nullptr)
+        selected = dataTable->currentItem()->data(Qt::UserRole).toInt();
+    const int scroll = dataTable->verticalScrollBar()->value();
     const QString filter = filterBox->currentData().toString();
+    const int sector = sectorFilter != nullptr ? sectorFilter->currentData().toInt() : -1;
+    const QString search = searchEdit != nullptr ? searchEdit->text().trimmed().toUpper() : QString();
+
     QList<int> rows;
     for(int i = 0; i < doc.blockCount(); i++)
     {
         const Mfc::Block& block = doc.block(i);
         bool show = true;
-        if(filter == "unknown")
+        if(filter == QStringLiteral("unknown"))
             show = !block.complete() || block.state == Mfc::BlockState::Failed;
-        else if(filter == "modified")
+        else if(filter == QStringLiteral("modified"))
             show = block.state == Mfc::BlockState::Modified;
-        else if(filter == "read")
+        else if(filter == QStringLiteral("read"))
             show = block.complete();
+        if(show && sector >= 0 && doc.spec().sectorOfBlock(i) != sector)
+            show = false;
+        if(show && !search.isEmpty())
+        {
+            const QString hex = block.hex.isEmpty() ? QString(32, QLatin1Char('?')) : block.hex;
+            show = hex.contains(search) || asciiOf(hex).toUpper().contains(search);
+        }
         if(show)
             rows.append(i);
     }
@@ -805,17 +1797,192 @@ void MfcWorkbench::refreshDataTable()
     {
         const int i = rows.at(row);
         const Mfc::Block& block = doc.block(i);
-        dataTable->setItem(row, 0, readOnlyItem(QString::number(i)));
+        QTableWidgetItem* blockItem = readOnlyItem(QString::number(i));
+        blockItem->setData(Qt::UserRole, i);
+        dataTable->setItem(row, 0, blockItem);
         dataTable->setItem(row, 1, readOnlyItem(QString::number(doc.spec().sectorOfBlock(i))));
         dataTable->setItem(row, 2, readOnlyItem(doc.spec().isTrailerBlock(i) ? tr("trailer") : tr("data")));
-        QTableWidgetItem* hexItem = new QTableWidgetItem(spacedHex(block.hex.isEmpty()
-                                                                  ? QString(32, QLatin1Char('?'))
-                                                                  : block.hex));
+        const QString hex = block.hex.isEmpty() ? QString(32, QLatin1Char('?')) : block.hex;
+        QTableWidgetItem* hexItem = new QTableWidgetItem(spacedHex(hex));
         hexItem->setData(Qt::UserRole, i);
         dataTable->setItem(row, 3, hexItem);
-        dataTable->setItem(row, 4, readOnlyItem(blockStateText(block.state)));
+        dataTable->setItem(row, 4, readOnlyItem(asciiOf(hex)));
+        QTableWidgetItem* stateItem = readOnlyItem(blockStateText(block.state));
+        if(block.state == Mfc::BlockState::Failed)
+            stateItem->setForeground(QColor(190, 40, 40));
+        else if(block.state == Mfc::BlockState::Modified)
+            stateItem->setForeground(QColor(190, 130, 0));
+        else if(block.state == Mfc::BlockState::Verified)
+            stateItem->setForeground(QColor(0, 150, 90));
+        dataTable->setItem(row, 5, stateItem);
     }
     updatingTables = false;
+    dataTable->verticalScrollBar()->setValue(scroll);
+    if(selected >= 0)
+        for(int row = 0; row < dataTable->rowCount(); row++)
+            if(dataTable->item(row, 0)->data(Qt::UserRole).toInt() == selected)
+            {
+                dataTable->selectRow(row);
+                break;
+            }
+    refreshBlockDetails();
+}
+
+void MfcWorkbench::refreshBlockDetails()
+{
+    if(detailView == nullptr)
+        return;
+    QTableWidgetItem* item = dataTable->currentItem();
+    if(item == nullptr)
+    {
+        detailView->setPlainText(tr("Select a block to see its details."));
+        return;
+    }
+    const int block = item->data(Qt::UserRole).toInt();
+    if(block < 0 || block >= doc.blockCount())
+    {
+        detailView->clear();
+        return;
+    }
+    const Mfc::Block& data = doc.block(block);
+    const int sector = doc.spec().sectorOfBlock(block);
+    const QString hex = data.hex.isEmpty() ? QString(32, QLatin1Char('?')) : data.hex;
+    QStringList lines;
+    lines << tr("Block %1 | sector %2 | %3")
+             .arg(block).arg(sector)
+             .arg(doc.spec().isTrailerBlock(block) ? tr("sector trailer") : tr("data"));
+    lines << tr("State: %1").arg(blockStateText(data.state));
+    if(data.readSession == 0)
+        lines << tr("Source: file or manual edit (no RF session)");
+    else
+        lines << tr("Source: card, session %1%2")
+                 .arg(data.readSession)
+                 .arg(data.readSession == targetSession ? tr(" (current)") : tr(" (historical)"));
+    const QString operation = tabs.value(activeIndex).lastOperation.value(block);
+    lines << tr("Last operation: %1").arg(operation.isEmpty() ? tr("none") : operation);
+    lines << QString();
+    lines << tr("Hex:   %1").arg(spacedHex(hex));
+    lines << tr("ASCII: %1").arg(asciiOf(hex));
+    if(doc.spec().isTrailerBlock(block))
+    {
+        const Mfc::KeyEntry& keyA = doc.key(sector, 'A');
+        const Mfc::KeyEntry& keyB = doc.key(sector, 'B');
+        const QString acl = hex.mid(12, 8);
+        lines << QString();
+        lines << tr("Key A: %1 (%2, %3)")
+                 .arg(keyA.hasValue() ? keyA.value : tr("unknown"),
+                      keyStateText(keyA.state), Mfc::keySourceName(keyA.source));
+        lines << tr("Key B: %1 (%2, %3)")
+                 .arg(keyB.hasValue() ? keyB.value : tr("unknown"),
+                      keyStateText(keyB.state), Mfc::keySourceName(keyB.source));
+        lines << tr("Access bits: %1 (%2)")
+                 .arg(acl, Mfc::TrailerAcl::valid(acl) ? tr("complement ok") : tr("complement invalid"));
+        if(Mfc::TrailerAcl::valid(acl))
+        {
+            auto yesNo = [](bool value) { return value ? tr("yes") : tr("no"); };
+            lines << tr("Key B readable with A: %1").arg(yesNo(Mfc::TrailerAcl::keyBReadable(acl)));
+            lines << tr("ACL readable with A/B: %1 / %2")
+                     .arg(yesNo(Mfc::TrailerAcl::aclReadable(acl, 'A')),
+                          yesNo(Mfc::TrailerAcl::aclReadable(acl, 'B')));
+            lines << tr("Key A writable with A/B: %1 / %2")
+                     .arg(yesNo(Mfc::TrailerAcl::keyAWriteAllowed(acl, 'A')),
+                          yesNo(Mfc::TrailerAcl::keyAWriteAllowed(acl, 'B')));
+            lines << tr("Key B writable with A/B: %1 / %2")
+                     .arg(yesNo(Mfc::TrailerAcl::keyBWriteAllowed(acl, 'A')),
+                          yesNo(Mfc::TrailerAcl::keyBWriteAllowed(acl, 'B')));
+        }
+    }
+    detailView->setPlainText(lines.join(QLatin1Char('\n')));
+}
+
+void MfcWorkbench::copyBlockHex()
+{
+    QStringList lines;
+    for(const QModelIndex& index : dataTable->selectionModel()->selectedRows())
+    {
+        QTableWidgetItem* item = dataTable->item(index.row(), 3);
+        if(item != nullptr)
+            lines << item->text();
+    }
+    if(lines.isEmpty() && dataTable->currentItem() != nullptr)
+        lines << dataTable->currentItem()->text();
+    if(!lines.isEmpty())
+        QApplication::clipboard()->setText(lines.join(QLatin1Char('\n')));
+    setStatus(tr("Copied %1 block(s) as hex").arg(lines.size()));
+}
+
+void MfcWorkbench::pasteBlocks()
+{
+    if(dataTable->currentItem() == nullptr)
+        return;
+    const QStringList lines = QApplication::clipboard()->text().split(QRegularExpression(QStringLiteral("[\\r\\n]+")),
+                                                                     Qt::SkipEmptyParts);
+    if(lines.isEmpty())
+        return;
+    const int startBlock = dataTable->currentItem()->data(Qt::UserRole).toInt();
+    QVector<QPair<int, QString>> updates;
+    for(int i = 0; i < lines.size(); i++)
+    {
+        const QString hex = Mfc::Document::normalizeHex(lines.at(i));
+        if(hex.size() != 32 || !Mfc::Document::isBlockText(hex))
+        {
+            QMessageBox::information(this, tr("Paste blocks"),
+                                     tr("Line %1 is not 32 hex symbols; nothing was changed.").arg(i + 1));
+            return;
+        }
+        const int block = startBlock + i;
+        if(block >= doc.blockCount())
+        {
+            QMessageBox::information(this, tr("Paste blocks"),
+                                     tr("Line %1 is outside the %2 block card; nothing was changed.")
+                                     .arg(i + 1).arg(doc.blockCount()));
+            return;
+        }
+        updates.append(qMakePair(block, hex));
+    }
+    pushUndo();
+    for(const QPair<int, QString>& update : updates)
+    {
+        const bool unknown = update.second.count(QLatin1Char('?')) == 32;
+        doc.setBlock(update.first, update.second,
+                     unknown ? Mfc::BlockState::Unknown : Mfc::BlockState::Modified);
+        tabs[activeIndex].lastOperation[update.first] = tr("pasted from clipboard");
+    }
+    markDirty();
+    refreshDataTable();
+    refreshSummary();
+    applyToMifare();
+    setStatus(tr("Pasted %1 block(s)").arg(updates.size()));
+}
+
+void MfcWorkbench::exportSelectedBlocks()
+{
+    QList<int> blocks;
+    for(const QModelIndex& index : dataTable->selectionModel()->selectedRows())
+        blocks << dataTable->item(index.row(), 0)->data(Qt::UserRole).toInt();
+    if(blocks.isEmpty() && dataTable->currentItem() != nullptr)
+        blocks << dataTable->currentItem()->data(Qt::UserRole).toInt();
+    if(blocks.isEmpty())
+        return;
+    const QString filename = QFileDialog::getSaveFileName(this, tr("Export selected blocks"),
+                                                          QStringLiteral("blocks.eml"),
+                                                          tr("EML (*.eml);;Text (*.txt)"));
+    if(filename.isEmpty())
+        return;
+    QByteArray output;
+    for(int block : blocks)
+    {
+        const QString hex = doc.blockHex(block);
+        output += (hex.isEmpty() ? QString(32, QLatin1Char('?')) : hex).toUtf8();
+        output += '\n';
+    }
+    QSaveFile file(filename);
+    if(!file.open(QIODevice::WriteOnly) || file.write(output) != output.size() || !file.commit())
+    {
+        QMessageBox::information(this, tr("Info"), tr("Cannot write %1").arg(filename));
+        return;
+    }
+    setStatus(tr("Exported %1 block(s)").arg(blocks.size()));
 }
 
 void MfcWorkbench::refreshAdvice()
@@ -879,6 +2046,7 @@ void MfcWorkbench::onKeyItemChanged(QTableWidgetItem* item)
     const int sector = item->row();
     const char type = item->column() == 1 ? 'A' : 'B';
     const QString key = Mfc::Document::normalizeKey(item->text());
+    pushUndo();
     if(key.isEmpty())
     {
         doc.setKey(sector, type, QString(), Mfc::KeyState::Unknown, Mfc::KeySource::None);
@@ -893,6 +2061,8 @@ void MfcWorkbench::onKeyItemChanged(QTableWidgetItem* item)
         refreshKeyTable();
         return;
     }
+    tabs[activeIndex].lastOperation[sector] = tr("Key %1 edited manually").arg(QChar(type));
+    markDirty();
     refreshKeyTable();
     refreshSummary();
     applyToMifare();
@@ -904,6 +2074,7 @@ void MfcWorkbench::onDataItemChanged(QTableWidgetItem* item)
         return;
     const int block = item->data(Qt::UserRole).toInt();
     const QString hex = Mfc::Document::normalizeHex(item->text());
+    pushUndo();
     if(hex.isEmpty())
     {
         doc.setBlock(block, QString(), Mfc::BlockState::Unknown);
@@ -919,6 +2090,8 @@ void MfcWorkbench::onDataItemChanged(QTableWidgetItem* item)
         refreshDataTable();
         return;
     }
+    tabs[activeIndex].lastOperation[block] = tr("edited manually");
+    markDirty();
     refreshDataTable();
     refreshSummary();
     applyToMifare();
@@ -1031,7 +2204,8 @@ MfcRecovery::Command MfcWorkbench::commandForMethod(MfcRecovery::Method method, 
     return command;
 }
 
-void MfcWorkbench::startMethod(MfcRecovery::Method method, const MfcRecovery::Command& command)
+void MfcWorkbench::startMethod(MfcRecovery::Method method, const MfcRecovery::Command& command,
+                               bool batchStep)
 {
     if(!deviceReady || cardConfirmPending)
     {
@@ -1039,7 +2213,7 @@ void MfcWorkbench::startMethod(MfcRecovery::Method method, const MfcRecovery::Co
                                      : tr("Connect the Proxmark3 first"));
         return;
     }
-    if(taskRunning)
+    if(taskRunning && !batchStep)
     {
         setStatus(tr("Another device task is still running"));
         return;
@@ -1065,6 +2239,7 @@ void MfcWorkbench::startMethod(MfcRecovery::Method method, const MfcRecovery::Co
     currentMethod = method;
     currentTarget.sector = command.targetSector;
     currentTarget.type = command.targetType;
+    taskDocumentIndex = activeIndex;
     cancelRequested = false;
     tracker.start(method, doc.keyCount());
     setTaskRunning(true);
@@ -1103,12 +2278,30 @@ void MfcWorkbench::onCommandOutput(const QString& output)
 
 void MfcWorkbench::onCommandFinished(const Util::ExecResult& result, const QString& output)
 {
-    if(!taskRunning)
+    if(!taskRunning && !batchRunning)
         return;
+    // A task is bound to the document that started it.  If the user switched
+    // tabs while it ran, bring that document back before touching it: late
+    // output must never be applied to another card's document.
+    if(taskDocumentIndex >= 0 && taskDocumentIndex < tabs.size() && taskDocumentIndex != activeIndex)
+    {
+        const int previous = activeIndex;
+        saveActiveView();
+        activeIndex = taskDocumentIndex;
+        loadActiveDocument();
+        setStatus(tr("Results applied to \"%1\" (the document that started the task)")
+                  .arg(tabs.at(activeIndex).name));
+        Q_UNUSED(previous);
+    }
     taskOutput = Util::stripAnsi(output);
     taskSession = 0;
     const MfcRecovery::ParseResult parsed = MfcRecovery::parseOutput(taskOutput, doc.spec(), currentTarget);
     applyParsedResult(parsed, currentMethod, result.status);
+    if(batchAwaiting)
+    {
+        batchAfterCommand(result.status);
+        return;
+    }
 
     MfcRecovery::TaskState state = MfcRecovery::TaskState::Failed;
     QString message;
@@ -1158,6 +2351,7 @@ void MfcWorkbench::onCommandFinished(const Util::ExecResult& result, const QStri
     }
     tracker.finish(state, message);
     setTaskRunning(false);
+    markDirty();
     logLine(message);
     setStatus(message);
     refreshKeyTable();
@@ -1262,6 +2456,7 @@ void MfcWorkbench::verifyKeys()
     }
 
     taskRunning = true;
+    taskDocumentIndex = activeIndex;
     cancelRequested = false;
     tracker.start(MfcRecovery::Method::KnownKeys, doc.keyCount());
     setTaskRunning(true);
@@ -1283,6 +2478,7 @@ void MfcWorkbench::verifyKeys()
     }
     taskRunning = false;
     setTaskRunning(false);
+    markDirty();
     refreshKeyTable();
     refreshSummary();
     applyToMifare();
@@ -1382,6 +2578,7 @@ void MfcWorkbench::readUnknownBlocks()
         return;
     }
     taskRunning = true;
+    taskDocumentIndex = activeIndex;
     cancelRequested = false;
     tracker.start(MfcRecovery::Method::KnownKeys, doc.blockCount());
     setTaskRunning(true);
@@ -1417,6 +2614,7 @@ void MfcWorkbench::readUnknownBlocks()
             failed++;
             if(!doc.blockComplete(block))
                 doc.setBlockState(block, Mfc::BlockState::Failed);
+            tabs[activeIndex].lastOperation[block] = tr("read failed: %1").arg(error);
             logLine(tr("Block %1: %2").arg(block).arg(error));
             continue;
         }
@@ -1432,6 +2630,7 @@ void MfcWorkbench::readUnknownBlocks()
         {
             doc.setBlock(block, hex, Mfc::BlockState::Read, targetSession);
         }
+        tabs[activeIndex].lastOperation[block] = tr("read in session %1").arg(targetSession);
         read++;
         if(read % 8 == 0)
         {
@@ -1443,6 +2642,7 @@ void MfcWorkbench::readUnknownBlocks()
 
     taskRunning = false;
     setTaskRunning(false);
+    markDirty();
     refreshDataTable();
     refreshKeyTable();
     refreshSummary();
@@ -1573,11 +2773,25 @@ bool MfcWorkbench::saveBackupTo(const QString& filename, QString* error, bool al
     }
     logLine(tr("Saved %1 (sha256 %2)").arg(filename, hash));
     setStatus(tr("Backup saved; sha256 %1").arg(hash.left(16)));
+    if(activeIndex >= 0 && activeIndex < tabs.size())
+    {
+        tabs[activeIndex].document = doc;
+        tabs[activeIndex].sourcePath = filename;
+        tabs[activeIndex].sourceKind = QStringLiteral("file");
+        tabs[activeIndex].dirty = false;
+        if(!tabs.at(activeIndex).draftId.isEmpty())
+        {
+            drafts.remove(tabs.at(activeIndex).draftId);
+            tabs[activeIndex].draftId.clear();
+        }
+        refreshDocumentTabs();
+    }
     return true;
 }
 
 Mfc::WriteOutcome MfcWorkbench::writeBlockOnce(int block, const QString& hex,
-                                              const Mfc::TrailerPlan* trailer, QString* detail)
+                                              const Mfc::TrailerPlan* trailer, QString* detail,
+                                              QString* readBackOut)
 {
     auto say = [detail](const QString& text) {
         if(detail != nullptr)
@@ -1641,6 +2855,8 @@ Mfc::WriteOutcome MfcWorkbench::writeBlockOnce(int block, const QString& hex,
             say(tr("write reported ok, read-back failed: %1").arg(readError));
             return Mfc::WriteOutcome::WrittenUnverified;
         }
+        if(readBackOut != nullptr)
+            *readBackOut = readBack;
         if(readBack != hex)
         {
             say(tr("read-back differs: %1").arg(spacedHex(readBack)));
@@ -1670,6 +2886,8 @@ Mfc::WriteOutcome MfcWorkbench::writeBlockOnce(int block, const QString& hex,
         say(tr("write reported ok; the verification read was incomplete"));
         return Mfc::WriteOutcome::WrittenUnverified;
     }
+    if(readBackOut != nullptr)
+        *readBackOut = readBack;
     QStringList differences;
     if(verify.checkAcl && readBack.mid(12, 8) != newAcl)
         differences << tr("access bits %1 (wanted %2)").arg(readBack.mid(12, 8), newAcl);
@@ -1728,6 +2946,14 @@ void MfcWorkbench::writePlan()
                               &dialog);
     hint->setWordWrap(true);
     layout->addWidget(hint);
+    QLabel* target = new QLabel(tr("Source document: %1 | target card: %2 / %3 | session %4")
+                                .arg(tabs.value(activeIndex).name,
+                                     targetUidValue.isEmpty() ? tr("unknown UID") : targetUidValue,
+                                     doc.cardDisplayName())
+                                .arg(targetSession), &dialog);
+    target->setObjectName("mfcWriteTarget");
+    target->setWordWrap(true);
+    layout->addWidget(target);
 
     QCheckBox* block0Box = new QCheckBox(tr("Include block 0 (UID/manufacturer)"), &dialog);
     QCheckBox* trailerBox = new QCheckBox(tr("Include sector trailers (keys / access bits)"), &dialog);
@@ -1738,16 +2964,18 @@ void MfcWorkbench::writePlan()
 
     QTableWidget* table = new QTableWidget(&dialog);
     table->setObjectName("mfcWriteTable");
-    table->setColumnCount(6);
+    table->setColumnCount(7);
     table->setHorizontalHeaderLabels(QStringList()
                                      << tr("Write") << tr("Block") << tr("Type")
-                                     << tr("Document") << tr("Card") << tr("State"));
+                                     << tr("Document") << tr("Card before")
+                                     << tr("Read-back after") << tr("State"));
     table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
     table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
     table->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
     table->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Stretch);
-    table->horizontalHeader()->setSectionResizeMode(5, QHeaderView::ResizeToContents);
+    table->horizontalHeader()->setSectionResizeMode(5, QHeaderView::Stretch);
+    table->horizontalHeader()->setSectionResizeMode(6, QHeaderView::ResizeToContents);
     layout->addWidget(table, 1);
 
     QHBoxLayout* buttons = new QHBoxLayout();
@@ -1785,6 +3013,7 @@ void MfcWorkbench::writePlan()
         table->setItem(row, 3, readOnlyItem(spacedHex(plan.source().blockHex(block))));
         table->setItem(row, 4, readOnlyItem(QString()));
         table->setItem(row, 5, readOnlyItem(QString()));
+        table->setItem(row, 6, readOnlyItem(QString()));
     }
 
     auto syncRow = [&](int row) {
@@ -1792,6 +3021,7 @@ void MfcWorkbench::writePlan()
         const QSignalBlocker blocker(table);
         table->item(row, 0)->setCheckState(current.selected ? Qt::Checked : Qt::Unchecked);
         table->item(row, 4)->setText(current.cardHex.isEmpty() ? QString() : spacedHex(current.cardHex));
+        table->item(row, 5)->setText(current.readBack.isEmpty() ? QString() : spacedHex(current.readBack));
         QString state;
         if(current.outcome != Mfc::WriteOutcome::Pending)
             state = Mfc::writeOutcomeName(current.outcome);
@@ -1803,7 +3033,7 @@ void MfcWorkbench::writePlan()
             state += QStringLiteral(" [") + current.blockedReason + QStringLiteral("]");
         else if(state.isEmpty() && !current.allowed)
             state = current.blockedReason;
-        table->item(row, 5)->setText(state);
+        table->item(row, 6)->setText(state);
     };
     auto syncAll = [&]() {
         for(int row = 0; row < plan.rows().size(); row++)
@@ -2011,7 +3241,7 @@ void MfcWorkbench::writePlan()
             }
             const int row = plan.indexOfBlock(block);
             if(row >= 0)
-                table->item(row, 5)->setText(tr("writing..."));
+                table->item(row, 6)->setText(tr("writing..."));
             QApplication::processEvents();
             const QString hex = doc.blockHex(block);
             Mfc::TrailerPlan trailerPlan;
@@ -2022,8 +3252,10 @@ void MfcWorkbench::writePlan()
                 trailer = &trailerPlan;
             }
             QString detail;
-            const Mfc::WriteOutcome outcome = writeBlockOnce(block, hex, trailer, &detail);
+            QString readBack;
+            const Mfc::WriteOutcome outcome = writeBlockOnce(block, hex, trailer, &detail, &readBack);
             plan.setOutcome(block, outcome, detail);
+            plan.setReadBack(block, readBack);
             if(outcome == Mfc::WriteOutcome::Verified)
             {
                 doc.setBlock(block, hex, Mfc::BlockState::Verified, targetSession);
@@ -2377,6 +3609,75 @@ void MfcWorkbench::diagnoseNonceOnOpen()
     diagnoseNonce();
 }
 
+Mfc::Document MfcWorkbench::snapshotDocument() const
+{
+    // A snapshot is what the card itself returned in this RF session: unread
+    // blocks stay unknown and only keys authenticated now are carried over.
+    Mfc::Document snapshot(doc.cardType());
+    snapshot.uid = doc.uid;
+    snapshot.createdAt = QDateTime::currentDateTime();
+    for(int i = 0; i < doc.blockCount(); i++)
+        if(doc.blockReadIn(i, targetSession))
+            snapshot.setBlock(i, doc.blockHex(i), Mfc::BlockState::Read, targetSession);
+    for(int sector = 0; sector < doc.sectorCount(); sector++)
+        for(char type : {'A', 'B'})
+            if(doc.keyVerifiedIn(sector, type, targetSession))
+                snapshot.setKeyVerified(sector, type, doc.key(sector, type).value,
+                                        Mfc::KeySource::Card, targetSession);
+    return snapshot;
+}
+
+bool MfcWorkbench::loadDocumentFile(const QString& filename, Mfc::Document* out, QString* error) const
+{
+    const Mfc::IoResult result = Mfc::Document::loadDataFile(filename, QStringLiteral("auto"), out);
+    if(!result.ok && error != nullptr)
+        *error = result.error;
+    return result.ok;
+}
+
+bool MfcWorkbench::loadCompareFromLibrary(bool sideA, QString* error)
+{
+    Mfc::Library library(libraryRoot);
+    if(!library.load(error))
+        return false;
+    if(library.entries().isEmpty())
+    {
+        if(error != nullptr)
+            *error = tr("The backup library is empty");
+        return false;
+    }
+    QStringList labels;
+    for(const Mfc::LibraryEntry& entry : library.entries())
+        labels << tr("%1 - %2 - %3")
+                  .arg(entry.alias.isEmpty() ? entry.fileName : entry.alias,
+                       entry.uid.isEmpty() ? tr("no UID") : entry.uid,
+                       entry.importedAt.toString(QStringLiteral("yyyy-MM-dd HH:mm")));
+    bool ok = false;
+    const QString selected = QInputDialog::getItem(this, tr("Compare with library"),
+                                                   tr("Backup:"), labels, 0, false, &ok);
+    if(!ok)
+        return false;
+    const int index = labels.indexOf(selected);
+    if(index < 0)
+        return false;
+    Mfc::Document loaded;
+    if(!loadDocumentFile(library.entries().at(index).filePath, &loaded, error))
+        return false;
+    if(sideA)
+    {
+        compareA = loaded;
+        hasCompareA = true;
+        compareAEdit->setText(tr("Library: %1").arg(selected));
+    }
+    else
+    {
+        compareB = loaded;
+        hasCompareB = true;
+        compareBEdit->setText(tr("Library: %1").arg(selected));
+    }
+    return true;
+}
+
 bool MfcWorkbench::loadCompareFile(bool sideA, const QString& filename, QString* error)
 {
     Mfc::Document loaded;
@@ -2482,6 +3783,601 @@ void MfcWorkbench::exportCompareReport()
         return;
     }
     setStatus(tr("Report saved to %1").arg(filename));
+}
+
+
+void MfcWorkbench::startBatchFromDialog()
+{
+    if(!deviceReady || taskRunning || planBusy || batchRunning || cardConfirmPending)
+    {
+        setStatus(cardConfirmPending ? tr("Confirming the card; retry in a moment")
+                                     : tr("Another device task is still running"));
+        return;
+    }
+    if(!documentMatchesTarget() && !ensureCardIdentified())
+        return;
+
+    QDialog dialog(this);
+    dialog.setObjectName("mfcBatchDialog");
+    dialog.setWindowTitle(tr("Fill in missing keys"));
+    dialog.resize(900, 460);
+    QVBoxLayout* layout = new QVBoxLayout(&dialog);
+    QLabel* hint = new QLabel(tr("Queue one (sector, Key A/B) at a time. A key is marked verified only "
+                                 "after the card authenticates it; a recovered value that could not be "
+                                 "checked stays a candidate. Cancelling keeps everything already verified."),
+                              &dialog);
+    hint->setWordWrap(true);
+    layout->addWidget(hint);
+
+    QGridLayout* controls = new QGridLayout();
+    QComboBox* methodBoxLocal = new QComboBox(&dialog);
+    methodBoxLocal->setObjectName("mfcBatchMethod");
+    methodBoxLocal->addItem(tr("Verify candidates"), int(MfcRecovery::Method::KnownKeys));
+    methodBoxLocal->addItem(tr("Dictionary (chk)"), int(MfcRecovery::Method::Dictionary));
+    methodBoxLocal->addItem(tr("Automatic (autopwn)"), int(MfcRecovery::Method::AutoPwn));
+    methodBoxLocal->addItem(tr("Nested"), int(MfcRecovery::Method::Nested));
+    methodBoxLocal->addItem(tr("Static nested"), int(MfcRecovery::Method::StaticNested));
+    methodBoxLocal->addItem(tr("Hardnested"), int(MfcRecovery::Method::Hardnested));
+    methodBoxLocal->addItem(tr("Darkside"), int(MfcRecovery::Method::Darkside));
+    methodBoxLocal->addItem(tr("SEN"), int(MfcRecovery::Method::Sen));
+    QSpinBox* knownSectorLocal = new QSpinBox(&dialog);
+    knownSectorLocal->setRange(0, doc.sectorCount() - 1);
+    knownSectorLocal->setValue(qBound(0, knownSectorSpin->value(), doc.sectorCount() - 1));
+    QComboBox* knownTypeLocal = new QComboBox(&dialog);
+    knownTypeLocal->addItem("A", 'A');
+    knownTypeLocal->addItem("B", 'B');
+    QLineEdit* dictionaryLocal = new QLineEdit(&dialog);
+    dictionaryLocal->setPlaceholderText(tr("Optional dictionary file"));
+    controls->addWidget(new QLabel(tr("Method:"), &dialog), 0, 0);
+    controls->addWidget(methodBoxLocal, 0, 1);
+    controls->addWidget(new QLabel(tr("Starting key:"), &dialog), 0, 2);
+    controls->addWidget(knownSectorLocal, 0, 3);
+    controls->addWidget(knownTypeLocal, 0, 4);
+    controls->addWidget(dictionaryLocal, 1, 1, 1, 4);
+    layout->addLayout(controls);
+
+    QTableWidget* table = new QTableWidget(&dialog);
+    table->setObjectName("mfcBatchTable");
+    table->setColumnCount(5);
+    table->setHorizontalHeaderLabels(QStringList()
+                                     << tr("Sector") << tr("Key") << tr("Value")
+                                     << tr("State") << tr("Detail"));
+    table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    table->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+    table->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Stretch);
+    layout->addWidget(table, 1);
+    QLabel* progressLocal = new QLabel(&dialog);
+    progressLocal->setObjectName("mfcBatchProgress");
+    layout->addWidget(progressLocal);
+
+    QHBoxLayout* buttons = new QHBoxLayout();
+    QPushButton* start = new QPushButton(tr("Start"), &dialog);
+    QPushButton* stop = new QPushButton(tr("Stop"), &dialog);
+    QPushButton* retry = new QPushButton(tr("Retry missing only"), &dialog);
+    QPushButton* readRest = new QPushButton(tr("Read remaining blocks"), &dialog);
+    QPushButton* close = new QPushButton(tr("Close"), &dialog);
+    start->setObjectName("mfcBatchStart");
+    stop->setObjectName("mfcBatchStop");
+    retry->setObjectName("mfcBatchRetry");
+    readRest->setObjectName("mfcBatchReadRest");
+    buttons->addWidget(start);
+    buttons->addWidget(stop);
+    buttons->addWidget(retry);
+    buttons->addWidget(readRest);
+    buttons->addStretch(1);
+    buttons->addWidget(close);
+    layout->addLayout(buttons);
+
+    auto applyPlan = [&]() {
+        batchPlan.build(doc, targetSession);
+        table->setRowCount(batchPlan.size());
+        for(int row = 0; row < batchPlan.size(); row++)
+        {
+            const MfcBatch::Item& item = batchPlan.items().at(row);
+            table->setItem(row, 0, readOnlyItem(QString::number(item.sector)));
+            table->setItem(row, 1, readOnlyItem(QString(QChar(item.type))));
+            table->setItem(row, 2, readOnlyItem(item.key));
+            table->setItem(row, 3, readOnlyItem(MfcBatch::itemStateName(item.state)));
+            table->setItem(row, 4, readOnlyItem(item.detail));
+        }
+        const MfcBatch::Progress progressValue = batchPlan.progress();
+        progressLocal->setText(tr("Total %1 | processed %2 | verified %3 | missing %4 | failed %5")
+                               .arg(progressValue.total).arg(progressValue.processed)
+                               .arg(progressValue.verified).arg(progressValue.missing)
+                               .arg(progressValue.failed));
+    };
+    auto syncPlan = [&]() {
+        if(table->rowCount() != batchPlan.size())
+        {
+            applyPlan();
+            return;
+        }
+        for(int row = 0; row < batchPlan.size(); row++)
+        {
+            const MfcBatch::Item& item = batchPlan.items().at(row);
+            table->item(row, 2)->setText(item.key);
+            table->item(row, 3)->setText(MfcBatch::itemStateName(item.state));
+            table->item(row, 4)->setText(item.detail);
+            table->item(row, 3)->setForeground(item.state == MfcBatch::ItemState::Verified
+                                               ? QColor(0, 150, 90)
+                                               : item.state == MfcBatch::ItemState::Failed
+                                               ? QColor(190, 40, 40) : QColor(120, 120, 120));
+        }
+        const MfcBatch::Progress progressValue = batchPlan.progress();
+        progressLocal->setText(tr("Total %1 | processed %2 | verified %3 | missing %4 | failed %5")
+                               .arg(progressValue.total).arg(progressValue.processed)
+                               .arg(progressValue.verified).arg(progressValue.missing)
+                               .arg(progressValue.failed));
+    };
+    applyPlan();
+
+    QTimer updateTimer;
+    updateTimer.setInterval(150);
+    connect(&updateTimer, &QTimer::timeout, &dialog, syncPlan);
+    updateTimer.start();
+
+    auto setBusy = [&](bool busy) {
+        start->setEnabled(!busy);
+        stop->setEnabled(busy);
+        retry->setEnabled(!busy);
+        readRest->setEnabled(!busy);
+        close->setEnabled(!busy);
+        methodBoxLocal->setEnabled(!busy);
+        knownSectorLocal->setEnabled(!busy);
+        knownTypeLocal->setEnabled(!busy);
+        dictionaryLocal->setEnabled(!busy);
+    };
+    connect(start, &QPushButton::clicked, &dialog, [&]() {
+        const MfcRecovery::Method method = MfcRecovery::Method(methodBoxLocal->currentData().toInt());
+        batchKnownSector = knownSectorLocal->value();
+        batchKnownType = knownTypeLocal->currentData().toChar().toLatin1();
+        batchDictionary = dictionaryLocal->text().trimmed();
+        QString error;
+        if(!startBatchRecovery(method, &error))
+        {
+            QMessageBox::information(&dialog, tr("Batch recovery"), error);
+            return;
+        }
+        setBusy(true);
+        syncPlan();
+    });
+    connect(stop, &QPushButton::clicked, &dialog, [&]() {
+        cancelRequested = true;
+        if(util->isCommandActive())
+            util->cancelCommand(true);
+        setStatus(tr("Stopping the batch after the current item..."));
+    });
+    connect(table, &QTableWidget::cellDoubleClicked, &dialog, [&, this](int row, int) {
+        if(row < 0 || row >= batchPlan.size())
+            return;
+        const MfcBatch::Item item = batchPlan.items().at(row);
+        locateBlock(doc.spec().firstBlockOfSector(item.sector));
+    });
+    connect(retry, &QPushButton::clicked, &dialog, [&]() {
+        retryMissingKeys();
+        syncPlan();
+    });
+    connect(readRest, &QPushButton::clicked, &dialog, [&]() {
+        readRemainingBlocks();
+    });
+    connect(close, &QPushButton::clicked, &dialog, [&]() {
+        if(batchRunning)
+        {
+            cancelRequested = true;
+            if(util->isCommandActive())
+                util->cancelCommand(true);
+            return;
+        }
+        dialog.accept();
+    });
+    connect(this, &MfcWorkbench::taskStateChanged, &dialog, [&](bool running) {
+        if(!running && batchRunning)
+            setBusy(true);
+        else if(!running)
+            setBusy(false);
+    });
+    dialog.exec();
+    if(batchRunning)
+    {
+        cancelRequested = true;
+        if(util->isCommandActive())
+            util->cancelCommand(true);
+    }
+    refresh();
+}
+
+bool MfcWorkbench::startBatchRecovery(MfcRecovery::Method method, QString* error)
+{
+    if(!deviceReady || taskRunning || planBusy || batchRunning || cardConfirmPending)
+    {
+        if(error != nullptr)
+            *error = tr("Another device task is still running");
+        return false;
+    }
+    if(!documentMatchesTarget() && !ensureCardIdentified())
+    {
+        if(error != nullptr)
+            *error = tr("Identify the card first");
+        return false;
+    }
+    batchMethod = method;
+    batchPlan.build(doc, targetSession);
+    if(batchPlan.isEmpty())
+    {
+        if(error != nullptr)
+            *error = tr("Every key is already verified in this session");
+        return false;
+    }
+    batchRunning = true;
+    batchAwaiting = false;
+    batchTableDone = false;
+    batchCurrent = -1;
+    batchDocumentIndex = activeIndex;
+    taskDocumentIndex = activeIndex;
+    cancelRequested = false;
+    tracker.start(method, batchPlan.size());
+    setTaskRunning(true);
+    setStatus(tr("Batch: %1 item(s) queued").arg(batchPlan.size()));
+    batchNext();
+    return true;
+}
+
+void MfcWorkbench::batchNext()
+{
+    if(!batchRunning)
+        return;
+    if(cancelRequested)
+    {
+        batchPlan.invalidateRunning(tr("cancelled"));
+        const MfcBatch::Progress progressValue = batchPlan.progress();
+        batchRunning = false;
+        batchAwaiting = false;
+        batchCurrent = -1;
+        tracker.finish(MfcRecovery::TaskState::Cancelled, tr("Batch cancelled"));
+        setTaskRunning(false);
+        markDirty();
+        refreshKeyTable();
+        refreshSummary();
+        batchLabel->setText(tr("Batch cancelled: %1 verified, %2 missing")
+                            .arg(progressValue.verified).arg(progressValue.total - progressValue.processed));
+        setStatus(batchLabel->text());
+        return;
+    }
+
+    // Commands that recover the whole key table in one run.
+    if(batchMethod == MfcRecovery::Method::Dictionary || batchMethod == MfcRecovery::Method::AutoPwn
+       || batchMethod == MfcRecovery::Method::Sen || batchMethod == MfcRecovery::Method::Isen)
+    {
+        if(batchTableDone)
+        {
+            const MfcBatch::Progress progressValue = batchPlan.progress();
+            batchRunning = false;
+            batchAwaiting = false;
+            batchCurrent = -1;
+            tracker.finish(progressValue.failed > 0 ? MfcRecovery::TaskState::Partial
+                                                    : MfcRecovery::TaskState::Completed,
+                           tr("Batch finished"));
+            setTaskRunning(false);
+            markDirty();
+            refreshKeyTable();
+            refreshSummary();
+            batchLabel->setText(tr("Batch finished: %1 verified, %2 failed, %3 missing")
+                                .arg(progressValue.verified).arg(progressValue.failed)
+                                .arg(progressValue.total - progressValue.processed));
+            setStatus(batchLabel->text());
+            return;
+        }
+        batchTableDone = true;
+        batchCurrent = -2;
+        knownSectorSpin->setValue(batchKnownSector);
+        knownTypeBox->setCurrentIndex(knownTypeBox->findData(batchKnownType));
+        if(!batchDictionary.isEmpty())
+            dictionaryEdit->setText(batchDictionary);
+        QString error;
+        const MfcRecovery::Command command = commandForMethod(batchMethod, &error);
+        if(!error.isEmpty() || command.text.trimmed().isEmpty())
+        {
+            batchPlan.setResult(0, MfcBatch::ItemState::Skipped, error);
+            QTimer::singleShot(0, this, &MfcWorkbench::batchNext);
+            return;
+        }
+        startMethod(batchMethod, command, true);
+        batchAwaiting = true;
+        return;
+    }
+
+    const int index = batchPlan.next();
+    if(index < 0)
+    {
+        const MfcBatch::Progress progressValue = batchPlan.progress();
+        batchRunning = false;
+        batchAwaiting = false;
+        batchCurrent = -1;
+        tracker.finish(progressValue.failed > 0 ? MfcRecovery::TaskState::Partial
+                                                : MfcRecovery::TaskState::Completed,
+                       tr("Batch finished"));
+        setTaskRunning(false);
+        markDirty();
+        refreshKeyTable();
+        refreshSummary();
+        batchLabel->setText(tr("Batch finished: %1 verified, %2 failed, %3 missing")
+                            .arg(progressValue.verified).arg(progressValue.failed)
+                            .arg(progressValue.total - progressValue.processed));
+        setStatus(batchLabel->text());
+        return;
+    }
+    batchCurrent = index;
+    const MfcBatch::Item item = batchPlan.items().at(index);
+    batchPlan.setResult(index, MfcBatch::ItemState::Running);
+    refreshSummary();
+
+    if(batchMethod == MfcRecovery::Method::KnownKeys)
+    {
+        if(item.key.isEmpty())
+        {
+            batchPlan.setResult(index, MfcBatch::ItemState::Skipped,
+                                tr("no candidate key: run a recovery method"));
+        }
+        else
+        {
+            const bool ok = verifyOneKey(item.sector, item.type, item.key);
+            batchPlan.setResult(index, ok ? MfcBatch::ItemState::Verified : MfcBatch::ItemState::Failed,
+                                ok ? tr("authenticated against the card") : tr("authentication failed"));
+            tabs[activeIndex].lastOperation[doc.spec().trailerBlockOfSector(item.sector)] =
+                ok ? tr("key %1 verified").arg(QChar(item.type))
+                   : tr("key %1 failed authentication").arg(QChar(item.type));
+        }
+        QTimer::singleShot(0, this, &MfcWorkbench::batchNext);
+        return;
+    }
+
+    // Per-target methods need a verified starting key.  Prefer the manually
+    // selected one, otherwise any verified key from another sector.
+    int knownSector = batchKnownSector;
+    char knownType = batchKnownType;
+    QString knownKey;
+    if(knownSector >= 0 && knownSector < doc.sectorCount()
+       && doc.key(knownSector, knownType).verifiedIn(targetSession)
+       && doc.key(knownSector, knownType).hasValue())
+        knownKey = doc.key(knownSector, knownType).value;
+    if(knownKey.isEmpty())
+    {
+        for(int sector = 0; sector < doc.sectorCount() && knownKey.isEmpty(); sector++)
+        {
+            if(sector == item.sector)
+                continue;
+            for(char type : {'A', 'B'})
+                if(doc.key(sector, type).verifiedIn(targetSession) && doc.key(sector, type).hasValue())
+                {
+                    knownSector = sector;
+                    knownType = type;
+                    knownKey = doc.key(sector, type).value;
+                    break;
+                }
+        }
+    }
+    if(knownKey.isEmpty())
+    {
+        batchPlan.setResult(index, MfcBatch::ItemState::Skipped,
+                            tr("no verified starting key for this method"));
+        QTimer::singleShot(0, this, &MfcWorkbench::batchNext);
+        return;
+    }
+
+    MfcRecovery::Command command;
+    if(batchMethod == MfcRecovery::Method::Nested || batchMethod == MfcRecovery::Method::StaticNested)
+        command = MfcRecovery::buildNested(configMap, doc.spec(),
+                                           batchMethod == MfcRecovery::Method::StaticNested,
+                                           knownSector, knownType, knownKey);
+    else if(batchMethod == MfcRecovery::Method::Hardnested)
+        command = MfcRecovery::buildHardnested(configMap, doc.spec(), knownSector, knownType,
+                                               knownKey, item.sector, item.type);
+    else if(batchMethod == MfcRecovery::Method::Darkside)
+    {
+        if(item.sector != 0 || item.type != 'A')
+        {
+            batchPlan.setResult(index, MfcBatch::ItemState::Skipped,
+                                tr("darkside only recovers sector 0 Key A"));
+            QTimer::singleShot(0, this, &MfcWorkbench::batchNext);
+            return;
+        }
+        command = MfcRecovery::buildDarkside(configMap);
+        command.targetSector = item.sector;
+        command.targetType = item.type;
+    }
+    if(command.text.trimmed().isEmpty())
+    {
+        batchPlan.setResult(index, MfcBatch::ItemState::Skipped,
+                            tr("the client profile has no command for this method"));
+        QTimer::singleShot(0, this, &MfcWorkbench::batchNext);
+        return;
+    }
+    currentTarget.sector = item.sector;
+    currentTarget.type = item.type;
+    startMethod(batchMethod, command, true);
+    batchAwaiting = true;
+}
+
+void MfcWorkbench::batchAfterCommand(Util::ExecStatus status)
+{
+    if(!batchRunning)
+        return;
+    batchAwaiting = false;
+    if(batchCurrent >= 0)
+    {
+        const MfcBatch::Item item = batchPlan.items().at(batchCurrent);
+        const Mfc::KeyEntry entry = doc.key(item.sector, item.type);
+        if(status == Util::EXEC_OK && entry.hasValue())
+        {
+            // A one-shot recovery stopped the persistent client; the reconnect
+            // is asynchronous, so the recovered value stays a candidate until
+            // it can be authenticated.  A persistent command is verified now.
+            const bool oneShot = (batchMethod == MfcRecovery::Method::Nested
+                                  || batchMethod == MfcRecovery::Method::Darkside);
+            if(oneShot)
+                batchPlan.setResult(batchCurrent, MfcBatch::ItemState::Candidate,
+                                    tr("recovered; verify after the reconnect"));
+            else
+            {
+                const bool ok = verifyOneKey(item.sector, item.type, entry.value);
+                batchPlan.setResult(batchCurrent,
+                                    ok ? MfcBatch::ItemState::Verified : MfcBatch::ItemState::Candidate,
+                                    ok ? tr("authenticated against the card")
+                                       : tr("recovered value did not authenticate"));
+            }
+        }
+        else
+            batchPlan.setResult(batchCurrent, MfcBatch::ItemState::Failed, tr("no key recovered"));
+    }
+    else
+    {
+        // Whole-table method: take the evidence from the document.
+        for(int i = 0; i < batchPlan.size(); i++)
+        {
+            const MfcBatch::Item item = batchPlan.items().at(i);
+            const Mfc::KeyEntry entry = doc.key(item.sector, item.type);
+            if(entry.verifiedIn(targetSession))
+                batchPlan.setResult(i, MfcBatch::ItemState::Verified, tr("authenticated against the card"));
+            else if(entry.hasValue())
+                batchPlan.setResult(i, MfcBatch::ItemState::Candidate, tr("candidate from the command output"));
+            else
+                batchPlan.setResult(i, MfcBatch::ItemState::Failed, tr("not recovered"));
+        }
+    }
+    batchCurrent = -1;
+    QTimer::singleShot(0, this, &MfcWorkbench::batchNext);
+}
+
+void MfcWorkbench::retryMissingKeys()
+{
+    if(!batchRunning)
+        return;
+    const int count = batchPlan.retryMissing();
+    setStatus(tr("%1 key(s) queued for another attempt").arg(count));
+    batchNext();
+}
+
+void MfcWorkbench::readRemainingBlocks()
+{
+    readUnknownBlocks();
+}
+
+void MfcWorkbench::refreshScanList()
+{
+    if(scanTable == nullptr)
+        return;
+    QTableWidgetItem* current = scanTable->currentItem();
+    const int selected = current != nullptr ? current->data(Qt::UserRole).toInt() : -1;
+    scanTable->setRowCount(0);
+    for(int index = 0; index < tabs.size(); index++)
+    {
+        if(tabs.at(index).sourceKind != QStringLiteral("scan"))
+            continue;
+        const int row = scanTable->rowCount();
+        scanTable->insertRow(row);
+        QTableWidgetItem* roundItem = readOnlyItem(QString::number(tabs.at(index).round));
+        roundItem->setData(Qt::UserRole, index);
+        scanTable->setItem(row, 0, roundItem);
+        const Mfc::Document& document = tabs.at(index).document;
+        scanTable->setItem(row, 1, readOnlyItem(document.uid));
+        scanTable->setItem(row, 2, readOnlyItem(document.cardDisplayName()));
+        scanTable->setItem(row, 3, readOnlyItem(QStringLiteral("%1/%2")
+                                                .arg(document.completeBlockCount())
+                                                .arg(document.blockCount())));
+        scanTable->setItem(row, 4, readOnlyItem(QString::number(document.verifiedKeyCount())));
+        scanTable->setItem(row, 5, readOnlyItem(tabs.at(index).name));
+        if(index == selected)
+            scanTable->selectRow(row);
+    }
+}
+
+void MfcWorkbench::scanToggled(bool on)
+{
+    scanEnabled = on;
+    scanButton->setText(on ? tr("Stop continuous scan") : tr("Start continuous scan"));
+    if(on)
+    {
+        scanTimer->start();
+        setStatus(tr("Continuous scan: present a card"));
+        scanTick();
+    }
+    else
+    {
+        scanTimer->stop();
+        scanCardPresent = false;
+        scanUid.clear();
+        setStatus(tr("Continuous scan stopped"));
+    }
+}
+
+void MfcWorkbench::scanTick()
+{
+    if(!scanEnabled || !deviceReady || util->isChannelOwned() || taskRunning || planBusy
+       || cardConfirmPending)
+        return;
+    QString uid;
+    Mfc::CardType type = doc.cardType();
+    QString error;
+    if(!queryCardIdentity(&uid, &type, &error))
+    {
+        if(scanCardPresent)
+        {
+            scanCardPresent = false;
+            scanUid.clear();
+            setStatus(tr("Scan: card removed; present it again for a new round"));
+        }
+        return;
+    }
+    if(scanCardPresent && scanUid.compare(uid, Qt::CaseInsensitive) == 0)
+    {
+        // The card stayed in place: keep the same round and document.
+        refreshScanList();
+        return;
+    }
+    scanCardPresent = true;
+    scanUid = uid;
+    scanRound++;
+    Mfc::Document scanned(type);
+    scanned.uid = uid;
+    targetPresent = true;
+    targetUidValue = uid;
+    targetType = type;
+    const int index = addDocument(scanned, tr("Scan %1 #%2").arg(uid).arg(scanRound),
+                                  QStringLiteral("scan"));
+    tabs[index].round = scanRound;
+    scanDocumentIndex = index;
+    refreshScanList();
+    setStatus(tr("Scan: %1 (%2)").arg(uid, Mfc::Spec::get(type).displayName()));
+    if(scanAutoRead)
+    {
+        if(Util::isDemoMode())
+        {
+            // The demonstration card carries its keys: read through the normal
+            // workbench path so the result is a normal document.
+            doc = Demo::Provider::instance().card();
+            doc.uid = uid;
+            tabs[activeIndex].document = doc;
+        }
+        if(documentMatchesTarget())
+            readUnknownBlocks();
+    }
+}
+
+void MfcWorkbench::scanItemChanged()
+{
+    const QModelIndexList rows = scanTable->selectionModel() ? scanTable->selectionModel()->selectedRows() : QModelIndexList();
+    if(rows.size() != 1)
+        return;
+    const int index = scanTable->item(rows.first().row(), 0)->data(Qt::UserRole).toInt();
+    if(index >= 0 && index < tabs.size() && index != activeIndex)
+    {
+        saveActiveView();
+        activeIndex = index;
+        loadActiveDocument();
+        refreshDocumentTabs();
+    }
 }
 
 void MfcWorkbench::setTaskRunning(bool running)

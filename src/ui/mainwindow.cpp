@@ -1,6 +1,12 @@
 ﻿#include "mainwindow.h"
 #include "ui_mainwindow.h"
 
+#include "ui/commandpalette.h"
+#include "ui/diagnosticspage.h"
+#include "ui/mfclibrarypage.h"
+#include "ui/mfupage.h"
+#include "ui/tracepage.h"
+
 #include <QJsonDocument>
 #include <QDirIterator>
 #include <QCoreApplication>
@@ -8,6 +14,10 @@
 #include <QSaveFile>
 #include <QSemaphore>
 #include <QSharedPointer>
+#include <QMenuBar>
+#include <QSet>
+#include <QShortcut>
+#include <QToolBar>
 
 MainWindow::MainWindow(QWidget *parent):
     QMainWindow(parent)
@@ -66,6 +76,44 @@ MainWindow::MainWindow(QWidget *parent):
     ui->funcTab->removeTab(3);
     workbench = new MfcWorkbench(util, mifare, this);
     ui->funcTab->insertTab(2, workbench, tr("MFC workbench"));
+    libraryPage = new MfcLibraryPage(this);
+    mfuPage = new MfuPage(util, this);
+    tracePage = new TracePage(util, this);
+    diagnosticsPage = new DiagnosticsPage(util, this);
+    ui->funcTab->insertTab(3, libraryPage, tr("Backup library"));
+    ui->funcTab->insertTab(4, mfuPage, tr("Ultralight / NTAG"));
+    ui->funcTab->insertTab(5, tracePage, tr("Trace"));
+    ui->funcTab->insertTab(6, diagnosticsPage, tr("Diagnostics"));
+
+    settings->beginGroup(QStringLiteral("Library"));
+    const QString libraryRoot = settings->value(QStringLiteral("root"),
+                                                QDir::current().filePath(QStringLiteral("library"))).toString();
+    settings->endGroup();
+    libraryPage->setLibraryRoot(libraryRoot);
+    workbench->setLibraryRoot(libraryRoot);
+    workbench->setDraftStoreDir(QDir::current().filePath(QStringLiteral("drafts")));
+
+    connect(libraryPage, &MfcLibraryPage::documentActivated,
+            this, &MainWindow::openDocumentInWorkbench);
+    connect(libraryPage, &MfcLibraryPage::compareRequested, this,
+            [this](const Mfc::Document& a, const Mfc::Document& b) {
+        workbench->setCompareDocuments(a, b, tr("library A"), tr("library B"));
+    });
+    connect(libraryPage, &MfcLibraryPage::statusMessage, this, [this](const QString& message) {
+        statusBar()->showMessage(message, 10000);
+    });
+    connect(workbench, &MfcWorkbench::documentActivated,
+            this, &MainWindow::onWorkbenchDocumentActivated);
+    connect(workbench, &MfcWorkbench::identityChanged, this, &MainWindow::onWorkbenchIdentity);
+    connect(mfuPage, &MfuPage::statusMessage, this, [this](const QString& message) {
+        statusBar()->showMessage(message, 10000);
+    });
+    connect(tracePage, &TracePage::statusMessage, this, [this](const QString& message) {
+        statusBar()->showMessage(message, 10000);
+    });
+    connect(diagnosticsPage, &DiagnosticsPage::statusMessage, this, [this](const QString& message) {
+        statusBar()->showMessage(message, 10000);
+    });
     connect(workbench, &MfcWorkbench::abortClientRequested, this, &MainWindow::on_stopButton_clicked);
     connect(workbench, &MfcWorkbench::documentTypeChanged, this, &MainWindow::onMfcDocumentTypeChanged);
     connect(workbench, &MfcWorkbench::statusMessage, this, [this](const QString& message) {
@@ -93,6 +141,53 @@ MainWindow::MainWindow(QWidget *parent):
     connect(portSearchTimer, &QTimer::timeout, this, &MainWindow::on_portSearchTimer_timeout);
     portSearchTimer->start();
 
+    buildTopStatus();
+
+    QMenu* toolsMenu = menuBar()->addMenu(tr("Tools"));
+    QAction* libraryAction = toolsMenu->addAction(tr("Backup library"), this, [this]() {
+        for(QDockWidget* dock : dockList)
+            if(dock->widget() == libraryPage)
+            {
+                dock->setVisible(true);
+                dock->raise();
+            }
+    });
+    QAction* mfuAction = toolsMenu->addAction(tr("Ultralight / NTAG"), this, [this]() {
+        for(QDockWidget* dock : dockList)
+            if(dock->widget() == mfuPage)
+            {
+                dock->setVisible(true);
+                dock->raise();
+            }
+    });
+    QAction* traceAction = toolsMenu->addAction(tr("Trace"), this, [this]() {
+        for(QDockWidget* dock : dockList)
+            if(dock->widget() == tracePage)
+            {
+                dock->setVisible(true);
+                dock->raise();
+            }
+    });
+    QAction* diagnosticsAction = toolsMenu->addAction(tr("Diagnostics"), this, [this]() {
+        for(QDockWidget* dock : dockList)
+            if(dock->widget() == diagnosticsPage)
+            {
+                dock->setVisible(true);
+                dock->raise();
+            }
+    });
+    toolsMenu->addSeparator();
+    demoAction = toolsMenu->addAction(tr("Demonstration mode (no device)"));
+    demoAction->setCheckable(true);
+    connect(demoAction, &QAction::toggled, this, &MainWindow::toggleDemoMode);
+    QAction* paletteAction = toolsMenu->addAction(tr("Command search..."));
+    paletteAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+K")));
+    connect(paletteAction, &QAction::triggered, this, &MainWindow::showCommandPalette);
+    Q_UNUSED(libraryAction);
+    Q_UNUSED(mfuAction);
+    Q_UNUSED(traceAction);
+    Q_UNUSED(diagnosticsAction);
+
     contextMenu = new QMenu();
     contextMenu->addAction(dockAllWindows);
     contextMenu->addSeparator();
@@ -105,6 +200,7 @@ MainWindow::MainWindow(QWidget *parent):
 
 MainWindow::~MainWindow()
 {
+    saveUiState();
     if(isolatedProcess != nullptr)
     {
         isolatedProcess->disconnect(this);
@@ -166,9 +262,178 @@ void MainWindow::initUI() // will be called by main.app
     signalInit();
     setState(false);
     dockInit();
+
+    settings->beginGroup(QStringLiteral("UI"));
+    const QByteArray geometry = settings->value(QStringLiteral("geometry")).toByteArray();
+    if(!geometry.isEmpty())
+        restoreGeometry(geometry);
+    const QByteArray windowState = settings->value(QStringLiteral("windowState")).toByteArray();
+    if(!windowState.isEmpty())
+        restoreState(windowState);
+    if(workbench != nullptr)
+        workbench->setViewState(settings->value(QStringLiteral("workbenchState")).toByteArray());
+    settings->endGroup();
 }
 
 // ******************** basic functions ********************
+
+
+void MainWindow::buildTopStatus()
+{
+    QToolBar* bar = new QToolBar(tr("Device status"), this);
+    bar->setObjectName("topStatusBar");
+    bar->setMovable(false);
+    deviceStatusLabel = new QLabel(tr("Device: not connected"), bar);
+    cardStatusLabel = new QLabel(tr("Card: -"), bar);
+    documentStatusLabel = new QLabel(tr("Document: -"), bar);
+    deviceStatusLabel->setObjectName("deviceStatusLabel");
+    cardStatusLabel->setObjectName("cardStatusLabel");
+    documentStatusLabel->setObjectName("documentStatusLabel");
+    cardStatusLabel->setMinimumWidth(180);
+    documentStatusLabel->setMinimumWidth(200);
+    bar->addWidget(deviceStatusLabel);
+    bar->addSeparator();
+    bar->addWidget(cardStatusLabel);
+    bar->addSeparator();
+    bar->addWidget(documentStatusLabel);
+    addToolBar(Qt::TopToolBarArea, bar);
+    lastDevice = Device::Identity::load(*settings);
+    updateDeviceStatus();
+}
+
+void MainWindow::updateDeviceStatus()
+{
+    if(deviceStatusLabel == nullptr)
+        return;
+    const QString port = pendingPort.isEmpty() ? lastDevice.portName : pendingPort;
+    if(Util::isDemoMode())
+        deviceStatusLabel->setText(tr("Device: demo mode (no device)"));
+    else if(pm3state)
+        deviceStatusLabel->setText(tr("Device: %1 connected").arg(port.isEmpty() ? tr("client") : port));
+    else
+        deviceStatusLabel->setText(port.isEmpty() ? tr("Device: not connected")
+                                                  : tr("Device: %1 not connected").arg(port));
+    deviceStatusLabel->setToolTip(lastDevice.displayName());
+}
+
+void MainWindow::rememberDevice(const QString& portName)
+{
+    if(portName.isEmpty())
+        return;
+    for(const Device::Identity& identity : Device::Identity::availablePorts())
+        if(identity.portName == portName)
+        {
+            lastDevice = identity;
+            lastDevice.save(*settings);
+            updateDeviceStatus();
+            return;
+        }
+}
+
+void MainWindow::onWorkbenchIdentity(const QString& uid, const QString& cardName,
+                                     const QString& documentName)
+{
+    if(cardStatusLabel != nullptr)
+        cardStatusLabel->setText(tr("Card: %1%2")
+                                 .arg(uid.isEmpty() ? tr("not identified") : uid,
+                                      cardName.isEmpty() ? QString() : QStringLiteral(" / ") + cardName));
+    if(documentStatusLabel != nullptr)
+        documentStatusLabel->setText(tr("Document: %1").arg(documentName.isEmpty() ? tr("none") : documentName));
+}
+
+void MainWindow::onWorkbenchDocumentActivated(const Mfc::Document& document, const QString& name,
+                                              const QString& sourceKind)
+{
+    Q_UNUSED(document);
+    if(documentStatusLabel != nullptr)
+        documentStatusLabel->setText(tr("Document: %1 (%2)").arg(name, sourceKind));
+}
+
+void MainWindow::openDocumentInWorkbench(const Mfc::Document& document, const QString& name,
+                                         const QString& sourceKind)
+{
+    workbench->addDocument(document, name, sourceKind);
+    for(QDockWidget* dock : dockList)
+        if(dock->widget() == workbench)
+        {
+            dock->setVisible(true);
+            dock->raise();
+            break;
+        }
+    onWorkbenchDocumentActivated(document, name, sourceKind);
+}
+
+void MainWindow::showCommandPalette()
+{
+    if(commandPalette == nullptr)
+        commandPalette = new CommandPalette(this);
+    QVector<PaletteCommand> commands;
+    QSet<QString> seen;
+    const QList<QAction*> actions = findChildren<QAction*>();
+    for(QAction* action : actions)
+    {
+        if(action == nullptr || action->isSeparator() || action->text().isEmpty())
+            continue;
+        const QString text = action->text();
+        if(seen.contains(text))
+            continue;
+        seen.insert(text);
+        PaletteCommand command;
+        command.section = tr("Application");
+        command.text = text;
+        command.shortcut = action->shortcut().toString();
+        command.action = action;
+        commands.append(command);
+    }
+    // Workbench actions live on the widget; add them explicitly with sections.
+    commandPalette->setCommands(commands);
+    commandPalette->focusSearch();
+    commandPalette->exec();
+}
+
+void MainWindow::toggleDemoMode(bool on)
+{
+    Util::setDemoMode(on);
+    if(on)
+    {
+        if(pm3state)
+            on_PM3_disconnectButton_clicked();
+        workbench->setDeviceReady(true);
+        mfuPage->setDeviceReady(true);
+        tracePage->setDeviceReady(true);
+        diagnosticsPage->setDeviceState(true, QStringLiteral("DEMO"), QStringLiteral("demo"),
+                                        QStringLiteral("demo"), tr("demonstration mode"));
+        diagnosticsPage->refresh();
+        setStatusBar(connectStatusBar, tr("Demo mode"));
+        statusBar()->showMessage(tr("Demonstration mode: no device is used; every result is demo data."), 15000);
+        QTimer::singleShot(50, workbench, &MfcWorkbench::readCardInfo);
+    }
+    else
+    {
+        workbench->setDeviceReady(false);
+        mfuPage->setDeviceReady(false);
+        tracePage->setDeviceReady(false);
+        diagnosticsPage->setDeviceState(false, QString(), QString(), QString(), QString());
+        setStatusBar(connectStatusBar, tr("Not Connected"));
+        statusBar()->showMessage(tr("Demonstration mode off"), 5000);
+    }
+    demoAction->setText(on ? tr("Demonstration mode (active)")
+                           : tr("Demonstration mode (no device)"));
+    updateDeviceStatus();
+}
+
+void MainWindow::saveUiState()
+{
+    if(settings == nullptr)
+        return;
+    settings->beginGroup(QStringLiteral("UI"));
+    settings->setValue(QStringLiteral("geometry"), saveGeometry());
+    settings->setValue(QStringLiteral("windowState"), saveState());
+    if(workbench != nullptr)
+        settings->setValue(QStringLiteral("workbenchState"), workbench->viewState());
+    settings->endGroup();
+    settings->sync();
+}
 
 void MainWindow::on_portSearchTimer_timeout()
 {
@@ -213,6 +478,30 @@ void MainWindow::on_portSearchTimer_timeout()
         if(selectId != -1)
             ui->PM3_portBox->setCurrentIndex(selectId);
     }
+    updateDeviceStatus();
+
+    // A connected Proxmark that disappears and comes back with another COM
+    // number is the same device when its USB serial matches.  Reconnect it
+    // instead of leaving the user with a stale port name.
+    if(pm3state && !pendingPort.isEmpty() && !newPortList.contains(pendingPort))
+        portLostWhileConnected = true;
+    if(portLostWhileConnected && !pm3state && !connectInFlight && !lastClientPath.isEmpty())
+    {
+        const int match = Device::Identity::match(Device::Identity::availablePorts(), lastDevice);
+        if(match >= 0)
+        {
+            const QVector<Device::Identity> ports = Device::Identity::availablePorts();
+            const QString portName = ports.at(match).portName;
+            const int index = ui->PM3_portBox->findData(portName);
+            if(index >= 0)
+                ui->PM3_portBox->setCurrentIndex(index);
+            pendingPort = portName;
+            rememberDevice(portName);
+            portLostWhileConnected = false;
+            statusBar()->showMessage(tr("Device reconnected on %1").arg(portName), 8000);
+            QTimer::singleShot(200, this, &MainWindow::reconnectClient);
+        }
+    }
 }
 
 void MainWindow::on_PM3_connectButton_clicked()
@@ -243,6 +532,7 @@ void MainWindow::on_PM3_connectButton_clicked()
         // not in the list
         port = portBox->currentText();
     qDebug() << "port:" << port;
+    rememberDevice(port);
     QString startArgs = ui->Set_Client_startArgsEdit->text();
     QString clientPath = ui->PM3_pathBox->currentText();
     QFileInfo clientFile(clientPath);
@@ -399,6 +689,16 @@ void MainWindow::onPM3StateChanged(bool st, const QString& info, quint64 attempt
     pm3state = st;
     if(workbench != nullptr)
         workbench->setDeviceReady(st);
+    if(mfuPage != nullptr)
+        mfuPage->setDeviceReady(st || Util::isDemoMode());
+    if(tracePage != nullptr)
+        tracePage->setDeviceReady(st || Util::isDemoMode());
+    if(diagnosticsPage != nullptr)
+        diagnosticsPage->setDeviceState(st, pendingPort, lastClientVersion, lastFirmwareVersion,
+                                        st ? QString() : tr("not connected"));
+    updateDeviceStatus();
+    if(st)
+        portLostWhileConnected = false;
     setState(st);
     if(st == true)
     {
@@ -1655,6 +1955,8 @@ void MainWindow::signalInit()
 
 void MainWindow::setStatusBar(QLabel * target, const QString& text)
 {
+    if(target == nullptr)
+        return; // a task may report before initUI() created the labels
     if(target == PM3VersionBar)
         target->setText(tr("HW Version:") + text);
     else if(target == connectStatusBar)
@@ -1769,6 +2071,27 @@ void MainWindow::applyCapabilities()
     applyPage(workbench, mf);
     applyPage(ui->lfTab, lf);
     applyPage(this->t55xxTab, lf);
+    if(libraryPage != nullptr)
+        libraryPage->setEnabled(true);
+    if(mfuPage != nullptr)
+    {
+        mfuPage->setCapabilities(capabilities);
+        mfuPage->setDeviceReady(pm3state || Util::isDemoMode());
+        applyPage(mfuPage, mf);
+    }
+    if(tracePage != nullptr)
+    {
+        tracePage->setCapabilities(capabilities);
+        tracePage->setDeviceReady(pm3state || Util::isDemoMode());
+        applyPage(tracePage, hfSniff);
+    }
+    if(diagnosticsPage != nullptr)
+    {
+        diagnosticsPage->setCapabilities(capabilities);
+        diagnosticsPage->setDeviceIdentity(lastDevice);
+        diagnosticsPage->setDeviceState(pm3state, pendingPort, lastClientVersion,
+                                        lastFirmwareVersion, QString());
+    }
 
     const QString mfReason = capabilities.reason("ISO14443A");
     const QString lfReason = capabilities.reason("LF");
@@ -2101,6 +2424,7 @@ void MainWindow::dockInit()
     for(int i = 0; i < count; i++)
     {
         dock = new QDockWidget(ui->funcTab->tabText(0), this);
+        dock->setObjectName(QStringLiteral("dock_%1").arg(i));
         qDebug() << "dock name" << ui->funcTab->tabText(0);
         dock->setFeatures(QDockWidget::DockWidgetFloatable | QDockWidget::DockWidgetMovable);// movable is necessary, otherwise the dock cannot be dragged
         dock->setAllowedAreas(Qt::BottomDockWidgetArea);

@@ -278,6 +278,13 @@ void WritePlan::setPreview(int block, const QString& cardHex, PreviewState state
         target.blockedReason.clear();
 }
 
+void WritePlan::setReadBack(int block, const QString& hex)
+{
+    const int index = indexOfBlock(block);
+    if(index >= 0)
+        m_rows[index].readBack = hex;
+}
+
 void WritePlan::clearPreview()
 {
     for(WriteRow& row : m_rows)

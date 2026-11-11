@@ -25,6 +25,7 @@ PRE_TARGETDEPS += $$OUT_PWD/$$MOCK_TARGET
 SOURCES += \
     test_gui.cpp \
     ../src/common/capabilities.cpp \
+    ../src/common/deviceidentity.cpp \
     ../src/common/myeventfilter.cpp \
     ../src/common/pm3cmd.cpp \
     ../src/common/pm3process.cpp \
@@ -32,18 +33,30 @@ SOURCES += \
     ../src/ui/mf_sim_simdialog.cpp \
     ../src/module/lf.cpp \
     ../src/module/mifare.cpp \
+    ../src/module/demomode.cpp \
+    ../src/module/mfcbatch.cpp \
     ../src/module/mfcdocument.cpp \
+    ../src/module/mfcdraftstore.cpp \
+    ../src/module/mfclibrary.cpp \
+    ../src/module/mfudocument.cpp \
+    ../src/module/tracemodel.cpp \
     ../src/module/mfckeyrecovery.cpp \
     ../src/module/mfcwriteplan.cpp \
     ../src/module/t55xxtab.cpp \
     ../src/ui/mainwindow.cpp \
     ../src/ui/mfcworkbench.cpp \
+    ../src/ui/mfclibrarypage.cpp \
+    ../src/ui/mfupage.cpp \
+    ../src/ui/tracepage.cpp \
+    ../src/ui/diagnosticspage.cpp \
+    ../src/ui/commandpalette.cpp \
     ../src/ui/mf_attack_hardnesteddialog.cpp \
     ../src/ui/mf_trailerdecoderdialog.cpp \
     ../src/ui/mf_uid_parameterdialog.cpp
 
 HEADERS += \
     ../src/common/capabilities.h \
+    ../src/common/deviceidentity.h \
     ../src/common/myeventfilter.h \
     ../src/common/pm3cmd.h \
     ../src/common/pm3process.h \
@@ -51,12 +64,23 @@ HEADERS += \
     ../src/ui/mf_sim_simdialog.h \
     ../src/module/lf.h \
     ../src/module/mifare.h \
+    ../src/module/demomode.h \
+    ../src/module/mfcbatch.h \
     ../src/module/mfcdocument.h \
+    ../src/module/mfcdraftstore.h \
+    ../src/module/mfclibrary.h \
+    ../src/module/mfudocument.h \
+    ../src/module/tracemodel.h \
     ../src/module/mfckeyrecovery.h \
     ../src/module/mfcwriteplan.h \
     ../src/module/t55xxtab.h \
     ../src/ui/mainwindow.h \
     ../src/ui/mfcworkbench.h \
+    ../src/ui/mfclibrarypage.h \
+    ../src/ui/mfupage.h \
+    ../src/ui/tracepage.h \
+    ../src/ui/diagnosticspage.h \
+    ../src/ui/commandpalette.h \
     ../src/ui/mf_attack_hardnesteddialog.h \
     ../src/ui/mf_trailerdecoderdialog.h \
     ../src/ui/mf_uid_parameterdialog.h

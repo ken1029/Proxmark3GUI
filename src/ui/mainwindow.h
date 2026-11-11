@@ -36,6 +36,7 @@
 #include "module/t55xxtab.h"
 #include "ui/mfcworkbench.h"
 #include "common/util.h"
+#include "common/deviceidentity.h"
 #include "ui/mf_trailerdecoderdialog.h"
 
 QT_BEGIN_NAMESPACE
@@ -44,6 +45,12 @@ namespace Ui
 class MainWindow;
 }
 QT_END_NAMESPACE
+
+class MfcLibraryPage;
+class MfuPage;
+class TracePage;
+class DiagnosticsPage;
+class CommandPalette;
 
 class MainWindow : public QMainWindow
 {
@@ -71,6 +78,10 @@ public slots:
     // One-shot client used for commands that poll stdin (hf mf chk, autopwn).
     void runIsolatedCommand(const QString& cmd, const QString& label);
     void abortIsolatedCommand();
+    // Open a document produced by another page (library, scan, file) in the workbench.
+    void openDocumentInWorkbench(const Mfc::Document& document, const QString& name,
+                                 const QString& sourceKind);
+    void showCommandPalette();
 private slots:
 
     void on_PM3_connectButton_clicked();
@@ -230,13 +241,18 @@ private slots:
     void on_Set_UI_CMDFont_setButton_clicked();
 
     void onLFfreqConfChanged(int divisor, bool isCustomized);
+    void toggleDemoMode(bool on);
+    void onWorkbenchIdentity(const QString& uid, const QString& cardName,
+                             const QString& documentName);
+    void onWorkbenchDocumentActivated(const Mfc::Document& document, const QString& name,
+                                      const QString& sourceKind);
 
 private:
     Ui::MainWindow* ui;
     QButtonGroup* MFCardTypeBtnGroup;
-    QLabel* connectStatusBar;
-    QLabel* programStatusBar;
-    QLabel* PM3VersionBar;
+    QLabel* connectStatusBar = nullptr;
+    QLabel* programStatusBar = nullptr;
+    QLabel* PM3VersionBar = nullptr;
     QPushButton* stopButton;
     QAction* dockAllWindows;
     QAction* myInfo;
@@ -280,6 +296,19 @@ private:
 
     T55xxTab* t55xxTab;
     MfcWorkbench* workbench = nullptr;
+    MfcLibraryPage* libraryPage = nullptr;
+    MfuPage* mfuPage = nullptr;
+    TracePage* tracePage = nullptr;
+    DiagnosticsPage* diagnosticsPage = nullptr;
+    CommandPalette* commandPalette = nullptr;
+    QLabel* deviceStatusLabel = nullptr;
+    QLabel* cardStatusLabel = nullptr;
+    QLabel* documentStatusLabel = nullptr;
+    QAction* demoAction = nullptr;
+    Device::Identity lastDevice;
+    bool portLostWhileConnected = false;
+    QString lastClientVersion;
+    QString lastFirmwareVersion;
     Mifare* mifare;
     LF* lf;
     Util* util;
@@ -302,6 +331,10 @@ private:
     void dockInit();
     void loadConfig();
     void applyCapabilities();
+    void buildTopStatus();
+    void updateDeviceStatus();
+    void rememberDevice(const QString& portName);
+    void saveUiState();
 protected:
     void contextMenuEvent(QContextMenuEvent *event) override;
 signals:

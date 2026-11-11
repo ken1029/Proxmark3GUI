@@ -1,10 +1,13 @@
 ﻿#ifndef MFCWORKBENCH_H
 #define MFCWORKBENCH_H
 
+#include <QHash>
 #include <QWidget>
 
 #include "common/util.h"
+#include "module/mfcbatch.h"
 #include "module/mfcdocument.h"
+#include "module/mfcdraftstore.h"
 #include "module/mfckeyrecovery.h"
 #include "module/mfcwriteplan.h"
 
@@ -12,19 +15,27 @@ class QCheckBox;
 class QComboBox;
 class QLabel;
 class QLineEdit;
+class QListWidget;
 class QPlainTextEdit;
 class QProgressBar;
 class QPushButton;
 class QSpinBox;
+class QSplitter;
+class QTabBar;
+class QTabWidget;
 class QTableWidget;
 class QTimer;
+class QToolButton;
 
 class Mifare;
 
 /*
- * MIFARE Classic workbench: one document, per-sector key states, recovery
- * method advice, long-task control, reading/backup and offline A/B comparison.
- * All device access goes through Util; the document model is Mfc::Document.
+ * MIFARE Classic workbench.
+ *
+ * One document per tab, each with its own source, unsaved state and view
+ * position.  All device access goes through Util; the document model is
+ * Mfc::Document.  A task is bound to the document that started it, so late
+ * output can never be applied to another tab's card.
  */
 class MfcWorkbench : public QWidget
 {
@@ -41,36 +52,53 @@ public:
     Mfc::Document& document() { return doc; }
 
     // --- RF session / card identity -----------------------------------
-    // Every connection and every known card change starts a new session.  Keys
-    // and blocks keep the session that produced them; only evidence from the
-    // current session may be used to read or write the card in the field.
     quint64 activeSession() const { return targetSession; }
     QString targetUid() const { return targetUidValue; }
     bool hasTarget() const { return targetPresent; }
-    // The document was read from (or identified for) the card that is present.
     bool documentMatchesTarget() const;
-    // Identity reported by "Identify card".  Returns false when the document
-    // belongs to another card; the caller then decides (new document / keep).
     bool applyCardIdentity(const QString& uid, Mfc::CardType type, QString* error = nullptr);
-    // Start a fresh document for the card in the field (keeps the old one only
-    // if the caller saved it first).
     bool startNewDocumentForTarget(QString* error = nullptr);
-    // A recovery method that polls stdin runs in a one-shot client.  Stopping
-    // the persistent client for that is not a card change: keep the RF session
-    // and confirm the UID after the reconnect before its evidence is reused.
     void suspendSessionForOneShot();
-    // Write plan of the open dialog (test/automation hook).
     const Mfc::WritePlan& currentWritePlan() const { return plan; }
+
+    // --- documents ------------------------------------------------------
+    int documentCount() const { return tabs.size(); }
+    int currentDocumentIndex() const { return activeIndex; }
+    int addDocument(const Mfc::Document& document, const QString& name,
+                    const QString& sourceKind, const QString& sourcePath = QString());
+    void activateDocument(int index);
+    QString documentTabName(int index) const;
+    QString documentTabSource(int index) const;
+    bool documentTabDirty(int index) const;
+    void closeDocument(int index);
+    // Drafts are stored apart from the backup library.  A restored draft is
+    // marked as historical evidence: its session ids never apply to the card
+    // in the field.
+    void setDraftStoreDir(const QString& dir);
+    void setLibraryRoot(const QString& dir) { libraryRoot = dir; }
+    int draftCount() const { return drafts.drafts().size(); }
+    QString draftIdAt(int index) const
+    {
+        return index >= 0 && index < drafts.drafts().size() ? drafts.drafts().at(index).id : QString();
+    }
+    bool restoreDraft(const QString& id, QString* error = nullptr);
 
     // Test/automation hooks: no modal dialogs, explicit paths.
     bool importKeyFile(const QString& filename, const QString& layout, QString* error = nullptr);
-    // Automation hook: skip the modal "write to the card?" confirmation.  The
-    // write policy itself is never bypassed.
     void setConfirmWrites(bool on) { confirmWrites = on; }
-    // Save the document and its "<file>.sha256" sidecar without a file dialog.
     bool saveBackupTo(const QString& filename, QString* error = nullptr, bool allowUnknownBin = false);
     bool loadCompareFile(bool sideA, const QString& filename, QString* error = nullptr);
     Mfc::CompareResult currentComparison() const { return comparison; }
+    void setCompareDocuments(const Mfc::Document& a, const Mfc::Document& b,
+                             const QString& nameA = QString(), const QString& nameB = QString());
+    QByteArray viewState() const;
+    void setViewState(const QByteArray& state);
+    void locateBlock(int block);
+    void markDirty();
+    bool undoDocument();
+    bool redoDocument();
+    // Automation hook: run the batch queue without a dialog.
+    bool startBatchRecovery(MfcRecovery::Method method, QString* error = nullptr);
 
 public slots:
     void importFromMifare();
@@ -83,6 +111,10 @@ signals:
     void statusMessage(const QString& message);
     void abortClientRequested();
     void taskStateChanged(bool running);
+    // A document was opened for another page (library, scan, file).
+    void documentActivated(const Mfc::Document& document, const QString& name,
+                           const QString& sourceKind);
+    void identityChanged(const QString& uid, const QString& cardName, const QString& documentName);
 
 private slots:
     void refresh();
@@ -106,13 +138,64 @@ private slots:
     void onCommandOutput(const QString& output);
     void onCommandFinished(const Util::ExecResult& result, const QString& output);
 
+    // documents
+    void newDocumentTab();
+    void openDocumentTab();
+    void closeCurrentDocument();
+    void renameCurrentDocument();
+    void restoreDraftDialog();
+    void documentTabChanged(int index);
+    void documentTabCloseRequested(int index);
+    void documentTabContextMenu(const QPoint& pos);
+    void saveCurrentDocument();
+    void flushDrafts();
+
+    // data table
+    void refreshBlockDetails();
+    void copyBlockHex();
+    void pasteBlocks();
+    void exportSelectedBlocks();
+    void linkActivated(const QString& link);
+
+    // batch recovery
+    void startBatchFromDialog();
+    void batchNext();
+    void batchAfterCommand(Util::ExecStatus status);
+    void retryMissingKeys();
+    void readRemainingBlocks();
+
+    // continuous scan
+    void scanToggled(bool on);
+    void scanTick();
+    void scanItemChanged();
+
 private:
+    struct DocumentTab
+    {
+        Mfc::Document document;
+        QString name;
+        QString sourceKind; // "card", "file", "scan", "library", "draft", "new"
+        QString sourcePath;
+        bool dirty = false;
+        int scroll = 0;
+        int selectedBlock = -1;
+        int round = 0;
+        QString filterData = QStringLiteral("all");
+        QString draftId;
+        QString search;
+        QHash<int, QString> lastOperation;
+        QVector<Mfc::Document> undo;
+        QVector<Mfc::Document> redo;
+    };
+
     void buildUi();
     void refreshKeyTable();
     void refreshDataTable();
     void refreshAdvice();
     void refreshSummary();
     void refreshDiffTable();
+    void refreshDocumentTabs();
+    void refreshScanList();
     void setTaskRunning(bool running);
     void logLine(const QString& text);
     void setStatus(const QString& text);
@@ -121,35 +204,37 @@ private:
     QString blockStateText(Mfc::BlockState state) const;
     QString nonceText() const;
     bool chooseVerifiedKey(int sector, char* type, QString* key) const;
-    // Run the identify command without dialogs; false when no card answered.
     bool queryCardIdentity(QString* uid, Mfc::CardType* type, QString* error);
-    // Re-read the UID after a one-shot reconnect; keep the session only if it
-    // is the same card, otherwise drop the old evidence.
     void confirmOneShotSession();
-    // "Verify known keys" only makes sense for the card in the field: identify
-    // it first instead of asking the user to press Identify separately.
     bool ensureCardIdentified();
-    // Opening the recovery page is an implicit "what does this card allow?"
-    // check; diagnose the nonce type once so the advice starts from evidence.
     void diagnoseNonceOnOpen();
-    // Trailer payload from a raw read: Key A from this session's verified key,
-    // access bytes, and Key B from the card when the access conditions return
-    // it, otherwise from the verified key store (the card masks it).
     QString trailerReadback(int block, char authType, const QString& cardHex) const;
     bool readBlockOnce(int block, char keyType, const QString& key, QString* hex, QString* error);
+    bool loadDocumentFile(const QString& filename, Mfc::Document* out, QString* error) const;
+    Mfc::Document snapshotDocument() const;
+    bool loadCompareFromLibrary(bool sideA, QString* error = nullptr);
     bool verifyOneKey(int sector, char type, const QString& key);
-    // Returns the outcome and a human readable detail.  A data block is
-    // compared byte for byte; a trailer is verified through the new keys and
-    // its access conditions, never by comparing masked bytes.
     Mfc::WriteOutcome writeBlockOnce(int block, const QString& hex,
-                                     const Mfc::TrailerPlan* trailer, QString* detail);
-    void startMethod(MfcRecovery::Method method, const MfcRecovery::Command& command);
+                                     const Mfc::TrailerPlan* trailer, QString* detail,
+                                     QString* readBackOut = nullptr);
+    void startMethod(MfcRecovery::Method method, const MfcRecovery::Command& command,
+                     bool batchStep = false);
     MfcRecovery::Command commandForMethod(MfcRecovery::Method method, QString* error) const;
     void applyParsedResult(const MfcRecovery::ParseResult& parsed, MfcRecovery::Method method,
                            Util::ExecStatus status);
     void appendLog(const QString& text);
     void invalidateTargetWhenDisconnected();
     void refreshIdentity();
+
+    // documents
+    void saveActiveView();
+    void loadActiveDocument();
+    void pushUndo();
+    void setTabDirty(bool dirty);
+    void bindTaskToDocument();
+    bool openDocumentFile(const QString& filename, QString* error = nullptr);
+    void updateWindowTitle();
+    int indexOfDocumentFile(const QString& filename) const;
 
     Util* util = nullptr;
     Mifare* mifare = nullptr;
@@ -158,30 +243,26 @@ private:
     MfcRecovery::NonceType nonce = MfcRecovery::NonceType::Unknown;
     MfcRecovery::Tracker tracker;
     MfcRecovery::Method currentMethod = MfcRecovery::Method::KnownKeys;
-    // Sector/key type a single-key method (hardnested, darkside) is aiming at.
     MfcRecovery::Target currentTarget;
     QString taskOutput;
     bool taskRunning = false;
     bool deviceReady = false;
-    // The GUI itself stopped the persistent client for a one-shot recovery and
-    // must not treat that as a card change.
     bool oneShotSessionPending = false;
-    // The reconnect happened; the UID confirmation command is in flight.
     bool cardConfirmPending = false;
     bool updatingTables = false;
     bool cancelRequested = false;
-    // RF session of the card in the field, and what identifies it.
     quint64 sessionSeq = 0;
     quint64 targetSession = 0;
     bool targetPresent = false;
     QString targetUidValue;
     Mfc::CardType targetType = Mfc::CardType::M1K;
-    // Session of the running task, so late output cannot leak into the next.
     quint64 taskSession = 0;
+    int taskDocumentIndex = -1;
     Mfc::WritePlan plan;
-    // True while the write dialog owns the plan (preview/write/cancel).
     bool planBusy = false;
     bool confirmWrites = true;
+
+    QString libraryRoot;
 
     Mfc::Document compareA;
     Mfc::Document compareB;
@@ -189,16 +270,46 @@ private:
     bool hasCompareB = false;
     Mfc::CompareResult comparison;
 
+    // documents / drafts
+    QVector<DocumentTab> tabs;
+    int activeIndex = -1;
+    Mfc::DraftStore drafts;
+    QTimer* draftTimer = nullptr;
+
+    // batch recovery
+    MfcBatch::Plan batchPlan;
+    MfcRecovery::Method batchMethod = MfcRecovery::Method::KnownKeys;
+    bool batchRunning = false;
+    bool batchAwaiting = false;
+    bool batchTableDone = false;
+    int batchCurrent = -1;
+    int batchDocumentIndex = -1;
+    int batchKnownSector = 0;
+    char batchKnownType = 'A';
+    QString batchDictionary;
+
+    // continuous scan
+    QTimer* scanTimer = nullptr;
+    bool scanEnabled = false;
+    bool scanAutoRead = false;
+    bool scanCardPresent = false;
+    QString scanUid;
+    int scanDocumentIndex = -1;
+    int scanRound = 0;
+
     QLabel* cardLabel = nullptr;
     QLabel* uidLabel = nullptr;
     QLabel* nonceLabel = nullptr;
     QLabel* keySummary = nullptr;
     QLabel* blockSummary = nullptr;
     QLabel* stageLabel = nullptr;
+    QLabel* batchLabel = nullptr;
     QLabel* statusLabel = nullptr;
     QProgressBar* progress = nullptr;
     QComboBox* cardTypeBox = nullptr;
     QComboBox* filterBox = nullptr;
+    QComboBox* sectorFilter = nullptr;
+    QLineEdit* searchEdit = nullptr;
     QComboBox* methodBox = nullptr;
     QComboBox* knownTypeBox = nullptr;
     QComboBox* targetTypeBox = nullptr;
@@ -213,9 +324,17 @@ private:
     QTableWidget* dataTable = nullptr;
     QTableWidget* adviceTable = nullptr;
     QTableWidget* diffTable = nullptr;
+    QTableWidget* scanTable = nullptr;
+    QSplitter* dataSplitter = nullptr;
     QPlainTextEdit* logEdit = nullptr;
+    QPlainTextEdit* detailView = nullptr;
     QPushButton* runButton = nullptr;
     QPushButton* cancelButton = nullptr;
+    QPushButton* batchButton = nullptr;
+    QPushButton* scanButton = nullptr;
+    QTabWidget* pageTabs = nullptr;
+    QTabBar* docTabBar = nullptr;
+    QToolButton* docMenuButton = nullptr;
     QTimer* refreshTimer = nullptr;
 };
 

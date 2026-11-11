@@ -184,3 +184,50 @@ fixture／mock 只能證明狀態機與解析，不代表實體卡恢復成功�
 - `hardnested`／`staticnested`／`isen` 目前沒有輪詢 stdin，但仍採同一種一次性協定；若未來 client 改變行為，不需要再改 GUI。
 - Key B 是否可讀採 client／韌體一致的判定（trailer AC 值 0、1、2 視為可由 Key A 讀出）；不同卡片的實際行為仍以實測為準。
 - 4K 的 16-block sector 與 Mini 的 5-sector 對應已由單元測試覆蓋，但實體卡仍需驗證。
+
+## 9. mfc-r9：多文件、批次、掃卡與新頁面
+
+### 9.1 多文件與草稿
+
+`MfcWorkbench` 現在持有 `QVector<DocumentTab>`。每個 tab 保存 `Mfc::Document`、來源（`card`／`file`／`scan`／`library`／`draft`／`new`）、未儲存狀態、篩選、搜尋、選取、捲動與 undo／redo 堆疊。切換 tab 時先把目前 `doc` 寫回 tab，再載入目標文件；所有既有解析器與文件規則不變。
+
+任務在 `startMethod()`／`verifyKeys()`／`readUnknownBlocks()` 時記住 `taskDocumentIndex`。非同步任務完成時若使用者已切到別的分頁，會先切回啟動任務的文件再套用結果；同步讀取／驗證迴圈執行期間則拒絕切分頁，因為它會在事件迴圈之間直接修改 `doc`。
+
+未儲存文件由 `Mfc::DraftStore` 每 15 秒寫入 `drafts/`（`QSaveFile` 原子寫入，`drafts.json` 索引）。恢復後文件來源為 `draft`，RF session 會失效並要求重新辨識，避免把舊連線的驗證結果當成目前卡片的證據。
+
+### 9.2 資料表與編輯
+
+資料表欄位為 Block、Sector、Type、Hex、ASCII、State；可依狀態與 sector 篩選、搜尋 Hex／ASCII。右側細節顯示 block 狀態、來源 session、上次操作，trailer 另顯示 Key A／B、access bits 補碼驗證與各權限。右鍵可複製 Hex、貼上多列（先整批驗證，錯誤時不改文件）、匯出選取區塊、跳到金鑰表。編輯前會 push undo 快照，`Ctrl+Z`／`Ctrl+Y` 可復原／重做。
+
+### 9.3 批次補齊金鑰
+
+`MfcBatch::Plan` 是純資料佇列，列出所有尚未在目前 session 驗證的 `(sector, Key A/B)`。`MfcWorkbench::startBatchRecovery()` 依方法調度：
+
+- `KnownKeys`：逐項以 `rdbl` 認證候選值，成功才標 `verified`。
+- `Dictionary`／`AutoPwn`／`SEN`：client 一次處理整張卡，完成後以文件內 `verifiedIn(targetSession)` 的結果回填佇列。
+- `Nested`／`StaticNested`／`Hardnested`／`Darkside`：GUI 逐目標送命令；自動挑選其他 sector 的已驗證金鑰，或使用使用者指定的起始金鑰。一次性的 nested／darkside 結果在重連前只標 `candidate`，不冒充 `verified`。
+
+單項失敗記錄後繼續；取消／換卡／通道不確定時停止派送，`invalidateRunning()` 把進行中的項目還原為 pending，已驗證結果保留。「Retry missing only」只重排 `Failed`／`Candidate`。
+
+### 9.4 連續掃卡
+
+`Continuous scan` 頁以 1.5 秒週期執行唯讀 `hf 14a info`。同一 UID 且卡片未離開時維持同一輪；讀不到卡後再出現（即使 UID 相同）會建立新的一輪與新文件。每輪是正常 `Mfc::Document`，可命名、比較、匯出。`taskRunning`／`planBusy`／`Util::isChannelOwned()` 時掃描暫停。
+
+### 9.5 備份庫與比較來源
+
+`Mfc::Library` 以 `library.json` 加 `files/` 保存匯入檔；entry 記錄實際檔案 SHA-256、UID、卡型、完整度、版本、來源、別名／備註／標籤。重複內容以 SHA-256 判定但不合併。`planExport()` 先回報同名衝突，`exportEntry()` 才寫檔。
+
+比較頁每側可選目前文件、卡片快照、檔案或備份庫。卡片快照只包含 `blockReadIn(targetSession)` 的區塊與 `keyVerifiedIn(targetSession)` 的金鑰；`Document::compare()` 對不同 block 產生 byte 偏移註記。
+
+寫入計畫新增「Card before」與「Read-back after」欄；預覽與送命令前都重新檢查 `plan.matches(doc, targetSession)` 與 `documentMatchesTarget()`。
+
+### 9.6 Ultralight／NTAG、Trace、診斷、命令搜尋
+
+- `Mfu::Document` 解析 `hf mfu info`／`dump` 的頁面表，依卡型換算頁數與靜態／動態鎖定 bit，並直接從 page 3 的 capability container 解析 NDEF TLV（URI／Text 記錄）。未知頁面保持未知。
+- `Trace::parse()` 解析 `trace list` 的固定欄位，包含多行封包、parity／short byte 標記、CRC 與註解；`filter()` 支援方向、CRC、時間與文字；`toCsv()`／`toHexText()` 匯出選取封包。
+- `DiagnosticsPage` 顯示 COM／USB 身分、版本、manifest、通道擁有者與握手錯誤；`Copy summary` 與 `Save report...` 輸出純文字。
+- `Ctrl+K` 開啟 `CommandPalette`，以 `normalized()` 比對動作文字與快捷鍵，前綴符合優先，停用動作不可執行。
+
+### 9.7 示範模式
+
+`Util::setDemoMode(true)` 時，`execCMDWithResult()`／`startCommand()` 改由 `Demo::Provider` 回應同一批 client 命令（`hf 14a info`、`hf mf info/rdbl/wrbl/chk`、`hf mfu info/dump/ndefread`、`trace list`）。工作台、MFU、Trace 頁與寫入預覽都走原本入口；寫入只存在記憶體 overlay，結果明確標示為示範。`Demo::Provider::writeDumpFiles()` 可輸出兩份有差異的 dump。
