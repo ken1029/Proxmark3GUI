@@ -530,6 +530,7 @@ void MfcWorkbench::buildUi()
     methodLayout->addLayout(controls);
     pageTabs->addTab(methodPage, tr("Key recovery / decryption"));
     pageTabs->setObjectName("mfcTabs");
+    pageTabs->setCurrentIndex(1); // the daily flow starts at Data / backup
     // Switching to the recovery page is an implicit "what does this card
     // allow?" check.  Run the keyless nonce diagnostic so the applicability
     // table starts from evidence instead of "unknown (run diagnostics)".
@@ -645,6 +646,36 @@ void MfcWorkbench::buildUi()
     connect(scanButton, &QPushButton::toggled, this, &MfcWorkbench::scanToggled);
     connect(autoReadBox, &QCheckBox::toggled, this, [this](bool on) { scanAutoRead = on; });
     connect(scanTable, &QTableWidget::itemSelectionChanged, this, &MfcWorkbench::scanItemChanged);
+    identifyAction = new QAction(tr("Identify card"), this);
+    identifyAction->setObjectName("mfcIdentifyAction");
+    connect(identifyAction, &QAction::triggered, this, &MfcWorkbench::readCardInfo);
+    addAction(identifyAction);
+    readAction = new QAction(tr("Read missing blocks"), this);
+    readAction->setObjectName("mfcReadAction");
+    connect(readAction, &QAction::triggered, this, &MfcWorkbench::readUnknownBlocks);
+    addAction(readAction);
+    verifyAction = new QAction(tr("Verify known keys"), this);
+    verifyAction->setObjectName("mfcVerifyAction");
+    connect(verifyAction, &QAction::triggered, this, &MfcWorkbench::verifyKeys);
+    addAction(verifyAction);
+    backupAction = new QAction(tr("Save backup..."), this);
+    backupAction->setObjectName("mfcBackupAction");
+    connect(backupAction, &QAction::triggered, this, &MfcWorkbench::saveBackup);
+    addAction(backupAction);
+    writeAction = new QAction(tr("Write plan..."), this);
+    writeAction->setObjectName("mfcWriteAction");
+    connect(writeAction, &QAction::triggered, this, &MfcWorkbench::writePlan);
+    addAction(writeAction);
+    batchAction = new QAction(tr("Fill missing keys..."), this);
+    batchAction->setObjectName("mfcBatchAction");
+    connect(batchAction, &QAction::triggered, this, &MfcWorkbench::startBatchFromDialog);
+    addAction(batchAction);
+    scanAction = new QAction(tr("Start continuous scan"), this);
+    scanAction->setObjectName("mfcScanAction");
+    connect(scanAction, &QAction::triggered, this, [this]() {
+        scanButton->setChecked(!scanButton->isChecked());
+    });
+    addAction(scanAction);
     connect(scanNameButton, &QPushButton::clicked, this, [this]() {
         const QModelIndexList rows = scanTable->selectionModel() ? scanTable->selectionModel()->selectedRows() : QModelIndexList();
         if(rows.size() != 1)
@@ -731,6 +762,9 @@ void MfcWorkbench::buildUi()
         menu.addAction(tr("Paste rows"), this, &MfcWorkbench::pasteBlocks);
         menu.addAction(tr("Export selected blocks..."), this, &MfcWorkbench::exportSelectedBlocks);
         menu.addSeparator();
+        menu.addAction(tr("Go to comparison"), this, [this]() {
+            pageTabs->setCurrentIndex(2);
+        });
         menu.addAction(tr("Show sector in key table"), this, [this]() {
             const int block = dataTable->currentItem() ? dataTable->currentItem()->data(Qt::UserRole).toInt() : -1;
             if(block < 0)
@@ -1629,6 +1663,20 @@ void MfcWorkbench::refreshSummary()
         stageLabel->setText(tr("Idle"));
     runButton->setEnabled(deviceReady && !taskRunning && !planBusy);
     cancelButton->setEnabled(taskRunning);
+    if(identifyAction != nullptr)
+        identifyAction->setEnabled(deviceReady && !taskRunning && !planBusy && !cardConfirmPending);
+    if(readAction != nullptr)
+        readAction->setEnabled(deviceReady && !taskRunning && !planBusy);
+    if(verifyAction != nullptr)
+        verifyAction->setEnabled(deviceReady && !taskRunning && !planBusy);
+    if(backupAction != nullptr)
+        backupAction->setEnabled(!taskRunning);
+    if(writeAction != nullptr)
+        writeAction->setEnabled(deviceReady && !taskRunning && !planBusy && documentMatchesTarget());
+    if(batchAction != nullptr)
+        batchAction->setEnabled(deviceReady && !taskRunning && !planBusy);
+    if(scanAction != nullptr)
+        scanAction->setEnabled(deviceReady || Util::isDemoMode());
     emit identityChanged(doc.uid, doc.cardDisplayName(),
                          tabs.value(activeIndex).name);
 }
@@ -4028,6 +4076,11 @@ void MfcWorkbench::batchNext()
 {
     if(!batchRunning)
         return;
+    if(batchRunning && !documentMatchesTarget() && !Util::isDemoMode())
+    {
+        cancelRequested = true;
+        setStatus(tr("The card changed; the batch stopped after the current item"));
+    }
     if(cancelRequested)
     {
         batchPlan.invalidateRunning(tr("cancelled"));

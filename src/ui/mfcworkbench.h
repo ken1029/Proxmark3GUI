@@ -332,6 +332,13 @@ private:
     QPushButton* cancelButton = nullptr;
     QPushButton* batchButton = nullptr;
     QPushButton* scanButton = nullptr;
+    QAction* identifyAction = nullptr;
+    QAction* readAction = nullptr;
+    QAction* verifyAction = nullptr;
+    QAction* backupAction = nullptr;
+    QAction* writeAction = nullptr;
+    QAction* batchAction = nullptr;
+    QAction* scanAction = nullptr;
     QTabWidget* pageTabs = nullptr;
     QTabBar* docTabBar = nullptr;
     QToolButton* docMenuButton = nullptr;
