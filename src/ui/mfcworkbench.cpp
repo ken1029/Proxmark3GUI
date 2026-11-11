@@ -361,6 +361,15 @@ void MfcWorkbench::buildUi()
     controls->addWidget(cancelButton, 4, 2);
     methodLayout->addLayout(controls);
     tabs->addTab(methodPage, tr("Key recovery / decryption"));
+    tabs->setObjectName("mfcTabs");
+    // Switching to the recovery page is an implicit "what does this card
+    // allow?" check.  Run the keyless nonce diagnostic so the applicability
+    // table starts from evidence instead of "unknown (run diagnostics)".
+    connect(tabs, &QTabWidget::currentChanged, this, [this, tabs, methodPage](int) {
+        if(tabs->currentWidget() != methodPage)
+            return;
+        diagnoseNonceOnOpen();
+    });
 
     root->addWidget(tabs, 1);
 
@@ -493,6 +502,24 @@ bool MfcWorkbench::documentMatchesTarget() const
     return targetPresent && !doc.uid.isEmpty() && !targetUidValue.isEmpty()
            && doc.uid.compare(targetUidValue, Qt::CaseInsensitive) == 0
            && doc.cardType() == targetType;
+}
+
+bool MfcWorkbench::ensureCardIdentified()
+{
+    if(documentMatchesTarget())
+        return true;
+    if(!deviceReady)
+    {
+        setStatus(tr("Connect the Proxmark3 first"));
+        return false;
+    }
+    // readCardInfo() reports its own failure (no card, another card's document
+    // kept, ...), so the caller only has to stop when the target is still open.
+    // The flag blocks a second click while the identify dialog is open.
+    cardConfirmPending = true;
+    readCardInfo();
+    cardConfirmPending = false;
+    return documentMatchesTarget();
 }
 
 bool MfcWorkbench::applyCardIdentity(const QString& uid, Mfc::CardType type, QString* error)
@@ -1210,11 +1237,10 @@ void MfcWorkbench::verifyKeys()
             setStatus(tr("Confirming the card; retry in a moment"));
         return;
     }
-    if(!documentMatchesTarget())
-    {
-        setStatus(tr("Identify the card first: keys are verified against the card in the field"));
+    // Keys are verified against the card in the field.  Identify it first
+    // instead of turning the button into a no-op until Identify was pressed.
+    if(!documentMatchesTarget() && !ensureCardIdentified())
         return;
-    }
     QList<QPair<int, char>> pending;
     for(int s = 0; s < doc.sectorCount(); s++)
     {
@@ -2338,6 +2364,17 @@ void MfcWorkbench::diagnoseNonce()
     command.failurePattern = QStringLiteral("No tag found|Can't select card|command execution time out|not available in this mode");
     command.hardTimeoutMs = 120000;
     startMethod(MfcRecovery::Method::Isen, command);
+}
+
+void MfcWorkbench::diagnoseNonceOnOpen()
+{
+    if(!deviceReady || taskRunning || cardConfirmPending)
+        return;
+    // Only an unknown nonce needs a device round trip; switching tabs after a
+    // diagnosis keeps the result instead of re-running the command every time.
+    if(nonce != MfcRecovery::NonceType::Unknown)
+        return;
+    diagnoseNonce();
 }
 
 bool MfcWorkbench::loadCompareFile(bool sideA, const QString& filename, QString* error)

@@ -2,6 +2,11 @@
 
 [English](../../CHANGELOG.md)  
 
+### V0.3.7（feature/mfc-workbench，按需辨識與切頁檢測 nonce）
++ 「驗證已知金鑰」不再需要先手動按辨識：文件與現場卡片不一致時，`verifyKeys()` 會先辨識卡片（沿用既有的換卡對話框），再對目前 RF session 驗證所有候選金鑰；辨識失敗時保留文件並在標記任何金鑰失敗前停止
++ 切到「金鑰恢復／解密」頁時，若 nonce 類型仍未知，會自動執行一次免金鑰的 `hf mf info` 診斷，讓適用性表從證據開始，而不是停在「unknown (run diagnostics)」；已診斷過的 nonce 不會因每次切頁而重跑
++ 以 `verifyKeysIdentifiesCardFirst()`、`recoveryTabDiagnosesNonce()` 固定兩種行為
+
 ### V0.3.6（feature/mfc-workbench，一次性任務保留 session）
 + 一次性恢復任務不再中斷 RF session：GUI 為了釋放序列埠而停掉常駐 client，這不是換卡。自動重連後會重新讀取 UID；同一張卡沿用原本的 `targetSession`，恢復得到的金鑰可直接在資料／備份使用；UID 不同或讀不到卡時才丟棄舊證據並要求 Identify。UID 確認進行中會封鎖讀取／驗證／寫入／恢復
 + 以 `oneShotSessionSurvivesReconnect()`、`oneShotSessionDropsChangedCard()` 固定同卡與換卡兩種行為

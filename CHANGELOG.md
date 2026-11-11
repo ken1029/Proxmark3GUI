@@ -2,6 +2,11 @@
 
 [中文](doc/CHANGELOG/CHANGELOG_zh_CN.md)  
 
+### V0.3.7 (feature/mfc-workbench, identify on demand and nonce on tab)
++ "Verify known keys" no longer requires a separate Identify: when the document does not match the card in the field, `verifyKeys()` identifies the card first (the existing card-change dialog still applies) and then authenticates every candidate against that RF session; a failed identification keeps the document and stops before any key is marked failed
++ Opening the "Key recovery / decryption" tab diagnoses the nonce type once (keyless `hf mf info`) while it is still unknown, so the applicability table starts from evidence instead of "unknown (run diagnostics)"; a known nonce is not re-checked on every tab switch
++ `verifyKeysIdentifiesCardFirst()` and `recoveryTabDiagnosesNonce()` pin both behaviors
+
 ### V0.3.6 (feature/mfc-workbench, one-shot session preservation)
 + Keep the RF session across a one-shot recovery run: the GUI itself stops the persistent client to free the serial port, so that stop is not a card change. After the automatic reconnect the workbench re-reads the UID; the same card keeps `targetSession`, so recovered keys are immediately usable in Data/Backup, while a different UID (or no card) drops the old evidence and requires Identify. Read/verify/write/recovery are blocked while the UID confirmation is in flight
 + `oneShotSessionSurvivesReconnect()` and `oneShotSessionDropsChangedCard()` pin same-card and changed-card behavior

@@ -2223,6 +2223,84 @@ private slots:
         QDir::setCurrent(oldCwd);
     }
 
+    // "Verify known keys" must not require a separate Identify first: the card
+    // in the field is identified, then its keys are authenticated.
+    void verifyKeysIdentifiesCardFirst()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString oldCwd = QDir::currentPath();
+        QDir::setCurrent(dir.path());
+        QSettings settings("GUIsettings.ini", QSettings::IniFormat);
+        settings.setValue("language/name", "en_US");
+        settings.sync();
+
+        MainWindow window;
+        window.initUI();
+        MfcWorkbench* workbench = window.findChild<MfcWorkbench*>("mfcWorkbench");
+        Util* util = window.findChild<Util*>();
+        QVERIFY(workbench != nullptr);
+        QVERIFY(util != nullptr);
+
+        workbench->setDeviceReady(true);
+        Mfc::Document& doc = workbench->document();
+        QVERIFY(doc.setKey(0, 'A', "FFFFFFFFFFFF", Mfc::KeyState::Pending, Mfc::KeySource::Manual));
+        QVERIFY(!workbench->documentMatchesTarget());
+
+        util->setRunningState(true);
+        QSignalSpy writeSpy(util, &Util::write);
+        // One fixture answers both the identify and the trailer read.
+        armFixture(*util, QByteArray("UID: A1 A2 A3 A4\nMIFARE Classic 1K\n"
+                                     "FF FF FF FF FF FF 7F 07 88 00 12 34 56 78 90 AB\n"));
+        workbench->verifyKeys();
+
+        QVERIFY(workbench->documentMatchesTarget());
+        QCOMPARE(doc.uid, QString("A1A2A3A4"));
+        QVERIFY(doc.keyVerifiedIn(0, 'A', workbench->activeSession()));
+        QVERIFY(writeSpy.count() >= 2);
+
+        util->setRunningState(false);
+        QDir::setCurrent(oldCwd);
+    }
+
+    // Switching to the recovery page runs the keyless nonce diagnostic once, so
+    // the applicability table starts from evidence instead of "unknown".
+    void recoveryTabDiagnosesNonce()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString oldCwd = QDir::currentPath();
+        QDir::setCurrent(dir.path());
+        QSettings settings("GUIsettings.ini", QSettings::IniFormat);
+        settings.setValue("language/name", "en_US");
+        settings.sync();
+
+        MainWindow window;
+        window.initUI();
+        MfcWorkbench* workbench = window.findChild<MfcWorkbench*>("mfcWorkbench");
+        Util* util = window.findChild<Util*>();
+        QVERIFY(workbench != nullptr);
+        QVERIFY(util != nullptr);
+
+        workbench->setDeviceReady(true);
+        QTabWidget* tabs = workbench->findChild<QTabWidget*>("mfcTabs");
+        QVERIFY(tabs != nullptr);
+        QCOMPARE(workbench->nonce, MfcRecovery::NonceType::Unknown);
+
+        util->setRunningState(true);
+        armFixture(*util, QByteArray("Prng........ weak\n"
+                                     "[+] 2026-11-10T11:53:37Z remark: %TOKEN%\n"));
+        tabs->setCurrentIndex(tabs->count() - 1); // Key recovery / decryption
+        QElapsedTimer timer;
+        timer.start();
+        while(workbench->nonce == MfcRecovery::NonceType::Unknown && timer.elapsed() < 5000)
+            QTest::qWait(20);
+        QCOMPARE(workbench->nonce, MfcRecovery::NonceType::Normal);
+
+        util->setRunningState(false);
+        QDir::setCurrent(oldCwd);
+    }
+
     // Verification evidence belongs to the RF session that produced it.
     void mfcSessionScopedEvidence()
     {

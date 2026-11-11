@@ -126,6 +126,12 @@ private:
     // Re-read the UID after a one-shot reconnect; keep the session only if it
     // is the same card, otherwise drop the old evidence.
     void confirmOneShotSession();
+    // "Verify known keys" only makes sense for the card in the field: identify
+    // it first instead of asking the user to press Identify separately.
+    bool ensureCardIdentified();
+    // Opening the recovery page is an implicit "what does this card allow?"
+    // check; diagnose the nonce type once so the advice starts from evidence.
+    void diagnoseNonceOnOpen();
     // Trailer payload from a raw read: Key A from this session's verified key,
     // access bytes, and Key B from the card when the access conditions return
     // it, otherwise from the verified key store (the card masks it).
