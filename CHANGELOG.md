@@ -2,6 +2,10 @@
 
 [中文](doc/CHANGELOG/CHANGELOG_zh_CN.md)  
 
+### V0.3.4 (feature/mfc-workbench, reconnect fix)
++ Restore the persistent client after a one-shot recovery run: methods that poll stdin stop the persistent client to free the serial port, and the GUI now reconnects it (with the same path/args and the normal handshake) once the run ends, instead of leaving the user on "Not Connected" and asking for Connect again. A run started while disconnected still stays disconnected; a manual Connect during the 200 ms port-release window wins
++ `oneShotRunReconnectsClient()` pins the reconnect
+
 ### V0.3.3 (feature/mfc-workbench, one-shot output fix)
 + Keep capturing a running task's output when the channel is released: a one-shot recovery run frees the port by stopping the persistent client, and that stop cleared the capture flag, so `commandFinished()` received an empty string and every recovered key was reported as "Method finished without a usable key"
 + Read the methods that print one key instead of a table: `Brute force completed. Key found: XXXXXXXXXXXX` (hardnested), `Found valid key [ XXXXXXXXXXXX ]` (darkside, nested/staticnested per-block lines) and sen's `Reader material recovered sec NNN key A = XXXXXXXXXXXX` / `Key sec NNN key X = ...` / `Found initial key: sector N ...`. hardnested and darkside attribute the key to the command's target sector/key type; a lone key with no target is reported as a warning instead of being guessed into sector 0

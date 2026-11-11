@@ -2285,6 +2285,49 @@ private slots:
         QDir::setCurrent(oldCwd);
     }
 
+    // A recovery method that polls stdin runs in a one-shot client, which needs
+    // the serial port: the GUI stops the persistent client first.  It must
+    // restore that connection when the one-shot run ends, otherwise every
+    // recovery leaves the user on "Not Connected" and asking for Connect again.
+    void oneShotRunReconnectsClient()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString oldCwd = QDir::currentPath();
+        QDir::setCurrent(dir.path());
+        QSettings settings("GUIsettings.ini", QSettings::IniFormat);
+        settings.setValue("language/name", "en_US");
+        settings.sync();
+
+        MainWindow window;
+        window.initUI();
+        Util* util = window.findChild<Util*>();
+        QVERIFY(util != nullptr);
+        window.lastClientPath = makeMockClient(dir.path(), "v4.23346-suspect");
+        QVERIFY(!window.lastClientPath.isEmpty());
+        window.lastClientArgs = QStringList();
+        window.clientWorkingDir->setPath(dir.path());
+
+        // The GUI is connected: the one-shot run has to stop that client.
+        util->setRunningState(true);
+        window.pm3state = true;
+        QSignalSpy stateSpy(window.pm3, SIGNAL(PM3StatedChanged(bool,QString,quint64)));
+
+        window.runIsolatedCommand(QStringLiteral("hf mf chk --1k"), QStringLiteral("Dictionary"));
+        QVERIFY(!window.pm3state);
+
+        QElapsedTimer timer;
+        timer.start();
+        while(!window.pm3state && timer.elapsed() < 10000)
+            QTest::qWait(20);
+        QVERIFY2(window.pm3state, "the persistent client was not reconnected");
+        QVERIFY(!stateSpy.isEmpty());
+        QCOMPARE(stateSpy.last().at(0).toBool(), true);
+
+        window.on_PM3_disconnectButton_clicked();
+        QDir::setCurrent(oldCwd);
+    }
+
     // hardnested prints one recovered key for --tblk/--ta; the workbench has to
     // attribute it to the target sector instead of reporting "no usable key".
     void workbenchRunsHardnestedTask()

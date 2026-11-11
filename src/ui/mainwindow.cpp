@@ -72,8 +72,8 @@ MainWindow::MainWindow(QWidget *parent):
         statusBar()->showMessage(message, 10000);
     });
     connect(workbench, &MfcWorkbench::taskStateChanged, this, [this](bool running) {
-        // A one-shot recovery task stops the persistent client, so the pages
-        // stay disabled until the user reconnects.
+        // A one-shot recovery task stops the persistent client and reconnects
+        // it when the run ends, so the pages stay disabled while it runs.
         setState(!running && pm3state);
     });
     // One-shot client for commands that poll stdin, and the global channel
@@ -437,11 +437,18 @@ void MainWindow::runIsolatedCommand(const QString& cmd, const QString& label)
     }
 
     // The persistent client owns the serial port; stop it before the one-shot
-    // client starts so two processes never open the same COM port.
-    if(pm3state)
-        on_PM3_disconnectButton_clicked();
+    // client starts so two processes never open the same COM port.  Remember
+    // whether it was connected so the GUI can restore that connection by itself
+    // when the one-shot run ends.
+    reconnectAfterIsolated = false;
     if(pm3state)
     {
+        reconnectAfterIsolated = true;
+        on_PM3_disconnectButton_clicked();
+    }
+    if(pm3state)
+    {
+        reconnectAfterIsolated = false;
         util->isolatedFinished(Util::EXEC_BUSY);
         return;
     }
@@ -506,11 +513,31 @@ void MainWindow::finishIsolatedRun(int exitCode, QProcess::ExitStatus status)
         util->processOutput(QString::fromLocal8Bit(process->readAllStandardOutput()));
         process->deleteLater();
     }
-    // The persistent client was stopped to free the port: stay disconnected and
-    // let the user reconnect explicitly.
     const bool ok = status == QProcess::NormalExit && exitCode == 0;
     qDebug() << "one-shot client finished: exit=" << exitCode << "status=" << status << "ok=" << ok;
     util->isolatedFinished(ok ? Util::EXEC_OK : Util::EXEC_FAILED);
+
+    // The workbench has consumed the one-shot result.  Restore the persistent
+    // client that was stopped to free the port, so a recovery run does not end
+    // with the GUI disconnected.  The short delay lets Windows release the COM
+    // port after the one-shot process exited.
+    const bool reconnect = reconnectAfterIsolated;
+    reconnectAfterIsolated = false;
+    if(reconnect && !QCoreApplication::closingDown())
+        QTimer::singleShot(200, this, &MainWindow::reconnectClient);
+}
+
+void MainWindow::reconnectClient()
+{
+    if(pm3state || connectInFlight || lastClientPath.isEmpty()
+       || QCoreApplication::closingDown())
+        return; // already connected, connecting, or shutting down
+    setStatusBar(connectStatusBar, tr("Connecting..."));
+    connectInFlight = true;
+    ui->PM3_connectButton->setEnabled(false);
+    activeConnectAttempt = pm3->beginConnect();
+    qDebug() << "reconnect after one-shot client: attempt=" << activeConnectAttempt;
+    emit connectPM3(activeConnectAttempt, lastClientPath, lastClientArgs);
 }
 
 void MainWindow::on_PM3_disconnectButton_clicked()

@@ -2,6 +2,10 @@
 
 [English](../../CHANGELOG.md)  
 
+### V0.3.4（feature/mfc-workbench，重新連線修正）
++ 一次性恢復任務結束後自動接回常駐 client：會輪詢 stdin 的方法必須先停掉常駐 client 才能取得序列埠，現在改由 GUI 在任務結束後以相同路徑／參數重新連線（照正常握手流程），不再停在「未連線」要求使用者再按一次連線。原本就未連線時不會自動連線；200 ms 等待序列埠釋放的期間若使用者手動按連線，以使用者為準
++ 以 `oneShotRunReconnectsClient()` 固定此行為
+
 ### V0.3.3（feature/mfc-workbench，一次性程序輸出修正）
 + 釋放通道時不得停止收集進行中任務的輸出：一次性恢復任務會先停掉常駐 client 以釋放序列埠，而那個停止動作會清掉收集旗標，導致 `commandFinished()` 收到空字串，所有已取得的金鑰都被當成「方法結束，但沒有取得可用金鑰」
 + 讀得懂「只印一把金鑰」的方法：hardnested 的 `Brute force completed. Key found: XXXXXXXXXXXX`、darkside／nested 的 `Found valid key [ XXXXXXXXXXXX ]`，以及 sen 的 `Reader material recovered sec NNN key A = ...`、`Key sec NNN key X = ...`、`Found initial key: sector N ...`。hardnested／darkside 會把金鑰歸到命令的目標 sector／key type；沒有目標可歸屬時只回報警告，不會猜成 sector 0

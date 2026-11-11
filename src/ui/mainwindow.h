@@ -251,6 +251,8 @@ private:
 
     void uiInit();
     void finishIsolatedRun(int exitCode, QProcess::ExitStatus status);
+    // Bring the persistent client back after a one-shot run stopped it.
+    void reconnectClient();
 
     PM3Process* pm3;
     bool pm3state;
@@ -272,6 +274,9 @@ private:
     QStringList lastClientArgs;
     QProcess* isolatedProcess = nullptr;
     quint64 isolatedRunId = 0;
+    // The one-shot client needs the serial port, so a connected GUI is stopped
+    // first. Remember that state to restore the connection when the run ends.
+    bool reconnectAfterIsolated = false;
 
     T55xxTab* t55xxTab;
     MfcWorkbench* workbench = nullptr;

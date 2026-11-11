@@ -1027,7 +1027,7 @@ void MfcWorkbench::startMethod(MfcRecovery::Method method, const MfcRecovery::Co
     }
     taskSession = util->commandSession();
     setStatus(command.usesStdin
-              ? tr("Running %1 in a one-shot client (the workbench disconnects while it runs)...")
+              ? tr("Running %1 in a one-shot client (the client reconnects when it finishes)...")
                 .arg(MfcRecovery::methodName(method))
               : tr("Running %1...").arg(MfcRecovery::methodName(method)));
 }
