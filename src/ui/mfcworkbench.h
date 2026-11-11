@@ -55,6 +55,10 @@ public:
     // Start a fresh document for the card in the field (keeps the old one only
     // if the caller saved it first).
     bool startNewDocumentForTarget(QString* error = nullptr);
+    // A recovery method that polls stdin runs in a one-shot client.  Stopping
+    // the persistent client for that is not a card change: keep the RF session
+    // and confirm the UID after the reconnect before its evidence is reused.
+    void suspendSessionForOneShot();
     // Write plan of the open dialog (test/automation hook).
     const Mfc::WritePlan& currentWritePlan() const { return plan; }
 
@@ -117,6 +121,11 @@ private:
     QString blockStateText(Mfc::BlockState state) const;
     QString nonceText() const;
     bool chooseVerifiedKey(int sector, char* type, QString* key) const;
+    // Run the identify command without dialogs; false when no card answered.
+    bool queryCardIdentity(QString* uid, Mfc::CardType* type, QString* error);
+    // Re-read the UID after a one-shot reconnect; keep the session only if it
+    // is the same card, otherwise drop the old evidence.
+    void confirmOneShotSession();
     // Trailer payload from a raw read: Key A from this session's verified key,
     // access bytes, and Key B from the card when the access conditions return
     // it, otherwise from the verified key store (the card masks it).
@@ -148,6 +157,11 @@ private:
     QString taskOutput;
     bool taskRunning = false;
     bool deviceReady = false;
+    // The GUI itself stopped the persistent client for a one-shot recovery and
+    // must not treat that as a card change.
+    bool oneShotSessionPending = false;
+    // The reconnect happened; the UID confirmation command is in flight.
+    bool cardConfirmPending = false;
     bool updatingTables = false;
     bool cancelRequested = false;
     // RF session of the card in the field, and what identifies it.

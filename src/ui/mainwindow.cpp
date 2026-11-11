@@ -444,6 +444,10 @@ void MainWindow::runIsolatedCommand(const QString& cmd, const QString& label)
     if(pm3state)
     {
         reconnectAfterIsolated = true;
+        // This stop is internal to the one-shot run, not a card change: keep
+        // the RF session and let the workbench confirm the UID after reconnect.
+        if(workbench != nullptr)
+            workbench->suspendSessionForOneShot();
         on_PM3_disconnectButton_clicked();
     }
     if(pm3state)

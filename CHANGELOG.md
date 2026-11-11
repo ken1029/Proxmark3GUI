@@ -2,6 +2,10 @@
 
 [中文](doc/CHANGELOG/CHANGELOG_zh_CN.md)  
 
+### V0.3.6 (feature/mfc-workbench, one-shot session preservation)
++ Keep the RF session across a one-shot recovery run: the GUI itself stops the persistent client to free the serial port, so that stop is not a card change. After the automatic reconnect the workbench re-reads the UID; the same card keeps `targetSession`, so recovered keys are immediately usable in Data/Backup, while a different UID (or no card) drops the old evidence and requires Identify. Read/verify/write/recovery are blocked while the UID confirmation is in flight
++ `oneShotSessionSurvivesReconnect()` and `oneShotSessionDropsChangedCard()` pin same-card and changed-card behavior
+
 ### V0.3.5 (feature/mfc-workbench, trailer Key B fix)
 + Complete masked trailer blocks from the verified key store: a MIFARE Classic trailer read masks Key B for access conditions 3..5, so the workbench stored 12 `?` for it and every sector stayed "unknown" (16 unknown on a 1K card) even though all keys were already recovered/verified. `trailerReadback()` now fills the masked Key B from the verified key B of that sector, exactly like Key A, and logs why a trailer is still incomplete when the key is genuinely unknown
 + `trailerReadbackUsesVerifiedKeyB()` pins both cases: verified key B completes the trailer; a pending/unverified key B keeps the bytes unknown

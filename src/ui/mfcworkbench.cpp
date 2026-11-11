@@ -435,22 +435,45 @@ void MfcWorkbench::setConfigMap(const QVariantMap& config)
     refreshAdvice();
 }
 
+void MfcWorkbench::suspendSessionForOneShot()
+{
+    // Called before the persistent client is stopped to free the port for the
+    // one-shot recovery.  The stop is internal, so keep targetSession / UID /
+    // present and let confirmOneShotSession() re-check the card afterwards.
+    oneShotSessionPending = true;
+}
+
 void MfcWorkbench::setDeviceReady(bool ready)
 {
     deviceReady = ready;
     if(ready)
     {
-        // A new client connection is a new RF session: keys verified before it
-        // stay in the document as history but are not evidence for this card.
-        targetSession = ++sessionSeq;
-        targetPresent = true;
-        targetUidValue.clear();
-        targetType = doc.cardType();
-        setStatus(tr("Client connected; identify the card before reading or writing"));
+        if(oneShotSessionPending)
+        {
+            // The GUI stopped the client itself for a one-shot recovery.  Do
+            // not start a new RF session; confirm the UID first and keep the
+            // recovered keys valid only for the same card.
+            targetPresent = true;
+            targetType = doc.cardType();
+            cardConfirmPending = true;
+            setStatus(tr("Client reconnected; confirming the card..."));
+            QTimer::singleShot(0, this, &MfcWorkbench::confirmOneShotSession);
+        }
+        else
+        {
+            // A new client connection is a new RF session: keys verified before it
+            // stay in the document as history but are not evidence for this card.
+            targetSession = ++sessionSeq;
+            targetPresent = true;
+            targetUidValue.clear();
+            targetType = doc.cardType();
+            setStatus(tr("Client connected; identify the card before reading or writing"));
+        }
     }
     else
     {
-        invalidateTargetWhenDisconnected();
+        if(!oneShotSessionPending)
+            invalidateTargetWhenDisconnected();
     }
     refreshIdentity();
     refreshSummary();
@@ -983,9 +1006,10 @@ MfcRecovery::Command MfcWorkbench::commandForMethod(MfcRecovery::Method method, 
 
 void MfcWorkbench::startMethod(MfcRecovery::Method method, const MfcRecovery::Command& command)
 {
-    if(!deviceReady)
+    if(!deviceReady || cardConfirmPending)
     {
-        setStatus(tr("Connect the Proxmark3 first"));
+        setStatus(cardConfirmPending ? tr("Confirming the card; retry in a moment")
+                                     : tr("Connect the Proxmark3 first"));
         return;
     }
     if(taskRunning)
@@ -1180,8 +1204,12 @@ void MfcWorkbench::cancelTask()
 
 void MfcWorkbench::verifyKeys()
 {
-    if(!deviceReady || taskRunning)
+    if(!deviceReady || taskRunning || cardConfirmPending)
+    {
+        if(cardConfirmPending)
+            setStatus(tr("Confirming the card; retry in a moment"));
         return;
+    }
     if(!documentMatchesTarget())
     {
         setStatus(tr("Identify the card first: keys are verified against the card in the field"));
@@ -1316,8 +1344,12 @@ void MfcWorkbench::readBlocks()
 
 void MfcWorkbench::readUnknownBlocks()
 {
-    if(!deviceReady || taskRunning)
+    if(!deviceReady || taskRunning || cardConfirmPending)
+    {
+        if(cardConfirmPending)
+            setStatus(tr("Confirming the card; retry in a moment"));
         return;
+    }
     if(!documentMatchesTarget())
     {
         setStatus(tr("Identify the card first: reads need keys verified against this card"));
@@ -1632,9 +1664,10 @@ Mfc::WriteOutcome MfcWorkbench::writeBlockOnce(int block, const QString& hex,
 
 void MfcWorkbench::writePlan()
 {
-    if(taskRunning || planBusy)
+    if(taskRunning || planBusy || cardConfirmPending)
     {
-        setStatus(tr("Another device task is still running"));
+        setStatus(cardConfirmPending ? tr("Confirming the card; retry in a moment")
+                                     : tr("Another device task is still running"));
         return;
     }
     if(!deviceReady)
@@ -2131,12 +2164,13 @@ void MfcWorkbench::loadKeyFile()
         setStatus(tr("Loaded keys from %1").arg(filename));
 }
 
-void MfcWorkbench::readCardInfo()
+bool MfcWorkbench::queryCardIdentity(QString* uidOut, Mfc::CardType* typeOut, QString* error)
 {
     if(!deviceReady)
     {
-        setStatus(tr("Connect the Proxmark3 first"));
-        return;
+        if(error != nullptr)
+            *error = tr("Connect the Proxmark3 first");
+        return false;
     }
     const QVariantMap info = configMap.value("info").toMap();
     QString cmd = info.value("basic cmd").toString();
@@ -2150,8 +2184,9 @@ void MfcWorkbench::readCardInfo()
     appendLog(Util::stripAnsi(result.output));
     if(!result.isOk() && result.status != Util::EXEC_TIMEOUT)
     {
-        setStatus(tr("Card information failed: the client is not available"));
-        return;
+        if(error != nullptr)
+            *error = tr("Card information failed: the client is not available");
+        return false;
     }
 
     const QString clean = Util::stripAnsi(result.output);
@@ -2176,12 +2211,85 @@ void MfcWorkbench::readCardInfo()
 
     if(uid.isEmpty())
     {
-        setStatus(tr("No card answered; the document was not changed"));
+        if(error != nullptr)
+            *error = tr("No card answered; the document was not changed");
+        return false;
+    }
+    if(uidOut != nullptr)
+        *uidOut = uid;
+    if(typeOut != nullptr)
+        *typeOut = type;
+    return true;
+}
+
+void MfcWorkbench::confirmOneShotSession()
+{
+    if(!oneShotSessionPending)
+        return;
+    oneShotSessionPending = false;
+    if(!deviceReady)
+    {
+        cardConfirmPending = false;
+        invalidateTargetWhenDisconnected();
         refreshSummary();
         return;
     }
 
+    QString uid;
+    Mfc::CardType type = doc.cardType();
     QString error;
+    if(!queryCardIdentity(&uid, &type, &error))
+    {
+        cardConfirmPending = false;
+        invalidateTargetWhenDisconnected();
+        setStatus(tr("Client reconnected; the card could not be confirmed. Identify it before reading."));
+        refreshSummary();
+        return;
+    }
+
+    const bool sameCard = !doc.uid.isEmpty()
+                          && doc.uid.compare(uid, Qt::CaseInsensitive) == 0
+                          && doc.cardType() == type;
+    if(sameCard)
+    {
+        // Keep targetSession: the recovered keys were authenticated against
+        // this card in the one-shot client and remain valid.
+        targetPresent = true;
+        targetUidValue = uid;
+        targetType = type;
+        setStatus(tr("Client reconnected; same card %1 confirmed. Recovered keys stay valid.").arg(uid));
+    }
+    else
+    {
+        // The card changed while the one-shot client ran: no old evidence may
+        // be reused.  Keep the document, but require Identify / a new document.
+        invalidateTargetWhenDisconnected();
+        targetPresent = true;
+        targetUidValue = uid;
+        targetType = type;
+        setStatus(tr("Client reconnected; card %1 is not the document card. Identify or start a new document.").arg(uid));
+    }
+    cardConfirmPending = false;
+    refreshIdentity();
+    refreshKeyTable();
+    refreshDataTable();
+    refreshAdvice();
+    refreshSummary();
+    emit statusMessage(statusLabel->text());
+}
+
+void MfcWorkbench::readCardInfo()
+{
+    QString uid;
+    Mfc::CardType type = doc.cardType();
+    QString error;
+    if(!queryCardIdentity(&uid, &type, &error))
+    {
+        setStatus(error);
+        refreshSummary();
+        return;
+    }
+
     if(!applyCardIdentity(uid, type, &error))
     {
         // The document belongs to another card.  It is kept; the user decides

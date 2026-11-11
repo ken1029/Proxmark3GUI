@@ -2,6 +2,10 @@
 
 [English](../../CHANGELOG.md)  
 
+### V0.3.6（feature/mfc-workbench，一次性任務保留 session）
++ 一次性恢復任務不再中斷 RF session：GUI 為了釋放序列埠而停掉常駐 client，這不是換卡。自動重連後會重新讀取 UID；同一張卡沿用原本的 `targetSession`，恢復得到的金鑰可直接在資料／備份使用；UID 不同或讀不到卡時才丟棄舊證據並要求 Identify。UID 確認進行中會封鎖讀取／驗證／寫入／恢復
++ 以 `oneShotSessionSurvivesReconnect()`、`oneShotSessionDropsChangedCard()` 固定同卡與換卡兩種行為
+
 ### V0.3.5（feature/mfc-workbench，trailer Key B 修正）
 + 被遮罩的 trailer 改由已驗證金鑰庫補齊：MIFARE Classic 讀取 trailer 時，access condition 3～5 會遮罩 Key B，舊版因此存下 12 個 `?`，每個 sector 都留一個未知區塊（1K 卡共 16 個），即使金鑰早已全部恢復／驗證。`trailerReadback()` 現在會用該 sector 已驗證的 Key B 補上，與 Key A 相同；金鑰真的未知時仍保留未知，並在日誌說明原因
 + 以 `trailerReadbackUsesVerifiedKeyB()` 固定兩種情況：已驗證 Key B 會補齊 trailer；待驗證／未驗證的 Key B 仍保持未知

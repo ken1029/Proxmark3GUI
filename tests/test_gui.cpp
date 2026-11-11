@@ -2418,6 +2418,95 @@ private slots:
         QDir::setCurrent(oldCwd);
     }
 
+    // The internal stop for a one-shot recovery must not invalidate the RF
+    // session: after the reconnect the same UID keeps the recovered keys valid.
+    void oneShotSessionSurvivesReconnect()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString oldCwd = QDir::currentPath();
+        QDir::setCurrent(dir.path());
+        QSettings settings("GUIsettings.ini", QSettings::IniFormat);
+        settings.setValue("language/name", "en_US");
+        settings.sync();
+
+        MainWindow window;
+        window.initUI();
+        MfcWorkbench* workbench = window.findChild<MfcWorkbench*>("mfcWorkbench");
+        Util* util = window.findChild<Util*>();
+        QVERIFY(workbench != nullptr);
+        QVERIFY(util != nullptr);
+
+        util->setRunningState(true);
+        workbench->setDeviceReady(true);
+        const quint64 session = workbench->activeSession();
+        QString error;
+        QVERIFY2(workbench->applyCardIdentity("A1A2A3A4", Mfc::CardType::M1K, &error), qPrintable(error));
+        QVERIFY(workbench->document().setKeyVerified(0, 'A', "FFFFFFFFFFFF", Mfc::KeySource::Manual, session));
+
+        workbench->suspendSessionForOneShot();
+        workbench->setDeviceReady(false); // internal stop for the one-shot client
+        QCOMPARE(workbench->activeSession(), session);
+        QVERIFY(workbench->documentMatchesTarget());
+
+        armFixture(*util, QByteArray("UID: A1 A2 A3 A4\nMIFARE Classic 1K\n"));
+        workbench->setDeviceReady(true); // reconnect
+        QElapsedTimer timer;
+        timer.start();
+        while(workbench->cardConfirmPending && timer.elapsed() < 10000)
+            QTest::qWait(20);
+        QVERIFY(!workbench->cardConfirmPending);
+        QCOMPARE(workbench->activeSession(), session);
+        QVERIFY(workbench->documentMatchesTarget());
+        QVERIFY(workbench->document().key(0, 'A').verifiedIn(session));
+
+        util->setRunningState(false);
+        QDir::setCurrent(oldCwd);
+    }
+
+    // A different UID after the reconnect must drop the old evidence instead of
+    // reading the new card with keys from the previous one.
+    void oneShotSessionDropsChangedCard()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString oldCwd = QDir::currentPath();
+        QDir::setCurrent(dir.path());
+        QSettings settings("GUIsettings.ini", QSettings::IniFormat);
+        settings.setValue("language/name", "en_US");
+        settings.sync();
+
+        MainWindow window;
+        window.initUI();
+        MfcWorkbench* workbench = window.findChild<MfcWorkbench*>("mfcWorkbench");
+        Util* util = window.findChild<Util*>();
+        QVERIFY(workbench != nullptr);
+        QVERIFY(util != nullptr);
+
+        util->setRunningState(true);
+        workbench->setDeviceReady(true);
+        const quint64 session = workbench->activeSession();
+        QString error;
+        QVERIFY2(workbench->applyCardIdentity("A1A2A3A4", Mfc::CardType::M1K, &error), qPrintable(error));
+        QVERIFY(workbench->document().setKeyVerified(0, 'A', "FFFFFFFFFFFF", Mfc::KeySource::Manual, session));
+
+        workbench->suspendSessionForOneShot();
+        workbench->setDeviceReady(false);
+        armFixture(*util, QByteArray("UID: B1 B2 B3 B4\nMIFARE Classic 1K\n"));
+        workbench->setDeviceReady(true);
+        QElapsedTimer timer;
+        timer.start();
+        while(workbench->cardConfirmPending && timer.elapsed() < 10000)
+            QTest::qWait(20);
+        QVERIFY(!workbench->cardConfirmPending);
+        QVERIFY(workbench->activeSession() != session);
+        QVERIFY(!workbench->documentMatchesTarget());
+        QCOMPARE(workbench->targetUid(), QString("B1B2B3B4"));
+
+        util->setRunningState(false);
+        QDir::setCurrent(oldCwd);
+    }
+
     // hardnested prints one recovered key for --tblk/--ta; the workbench has to
     // attribute it to the target sector instead of reporting "no usable key".
     void workbenchRunsHardnestedTask()
