@@ -219,6 +219,8 @@ fixture／mock 只能證明狀態機與解析，不代表實體卡恢復成功�
 
 比較頁每側可選目前文件、卡片快照、檔案或備份庫。卡片快照只包含 `blockReadIn(targetSession)` 的區塊與 `keyVerifiedIn(targetSession)` 的金鑰；`Document::compare()` 對不同 block 產生 byte 偏移註記。
 
+從 BIN／EML／JSON 匯入的文件，block 雖然完整，但 `readSession` 不是本次工作階段，因此資料表會顯示「歷史」，快照一開始會是 0 個區塊。按「卡片快照」時若目前工作階段沒有讀回任何 block，會詢問是否要從卡片讀取後建立快照；需要先在「金鑰與存取」驗證金鑰。讀取只補本次工作階段缺的 block，已手動修改的 block 預設保留、不覆蓋；讀取失敗的歷史 block 也保留原值，不會被降級成 failed。
+
 寫入計畫新增「Card before」與「Read-back after」欄；預覽與送命令前都重新檢查 `plan.matches(doc, targetSession)` 與 `documentMatchesTarget()`。
 
 ### 9.6 Ultralight／NTAG、Trace、診斷、命令搜尋

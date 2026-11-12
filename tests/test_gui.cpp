@@ -3379,6 +3379,92 @@ private slots:
         Util::setDemoMode(false);
     }
 
+    // A dump loaded from disk has complete blocks but no blocks read in the
+    // current RF session.  The snapshot flow must read the card again instead
+    // of reporting zero blocks.
+    void workbenchSnapshotReadsImportedDocument()
+    {
+        struct DemoGuard
+        {
+            ~DemoGuard() { Util::setDemoMode(false); }
+        } demoGuard;
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString oldCwd = QDir::currentPath();
+        QDir::setCurrent(dir.path());
+        QSettings settings("GUIsettings.ini", QSettings::IniFormat);
+        settings.setValue("language/name", "en_US");
+        settings.sync();
+
+        Util::setDemoMode(true);
+        MainWindow window;
+        window.initUI();
+        MfcWorkbench* workbench = window.findChild<MfcWorkbench*>();
+        QVERIFY(workbench != nullptr);
+        workbench->setDeviceReady(true);
+
+        Mfc::Document imported(Mfc::CardType::M1K);
+        imported.uid = QStringLiteral("A1B2C3D4");
+        for(int i = 0; i < imported.blockCount(); i++)
+            imported.setBlock(i, QString(32, QLatin1Char('0')), Mfc::BlockState::Read, 0);
+        QVERIFY(imported.setKeyVerified(0, 'A', "FFFFFFFFFFFF", Mfc::KeySource::Manual,
+                                        workbench->activeSession()));
+        workbench->addDocument(imported, QStringLiteral("Imported"), QStringLiteral("file"));
+
+        QString error;
+        QVERIFY2(workbench->applyCardIdentity("A1B2C3D4", Mfc::CardType::M1K, &error),
+                 qPrintable(error));
+        QCOMPARE(workbench->currentSessionBlockCount(), 0);
+
+        QVERIFY2(workbench->readBlocksForSession(false, &error), qPrintable(error));
+        QVERIFY(workbench->currentSessionBlockCount() > 0);
+        QVERIFY(workbench->snapshotDocument().completeBlockCount() > 0);
+        QDir::setCurrent(oldCwd);
+    }
+
+    // Reading for a snapshot must not overwrite a manual edit.
+    void workbenchSnapshotKeepsModifiedBlocks()
+    {
+        struct DemoGuard
+        {
+            ~DemoGuard() { Util::setDemoMode(false); }
+        } demoGuard;
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString oldCwd = QDir::currentPath();
+        QDir::setCurrent(dir.path());
+        QSettings settings("GUIsettings.ini", QSettings::IniFormat);
+        settings.setValue("language/name", "en_US");
+        settings.sync();
+
+        Util::setDemoMode(true);
+        MainWindow window;
+        window.initUI();
+        MfcWorkbench* workbench = window.findChild<MfcWorkbench*>();
+        QVERIFY(workbench != nullptr);
+        workbench->setDeviceReady(true);
+
+        Mfc::Document imported(Mfc::CardType::M1K);
+        imported.uid = QStringLiteral("A1B2C3D4");
+        for(int i = 0; i < imported.blockCount(); i++)
+            imported.setBlock(i, QString(32, QLatin1Char('0')), Mfc::BlockState::Read, 0);
+        imported.setBlock(5, QStringLiteral("DEADBEEFCAFEBABE0011223344556677"),
+                          Mfc::BlockState::Modified, 0);
+        QVERIFY(imported.setKeyVerified(0, 'A', "FFFFFFFFFFFF", Mfc::KeySource::Manual,
+                                        workbench->activeSession()));
+        QVERIFY(imported.setKeyVerified(1, 'A', "FFFFFFFFFFFF", Mfc::KeySource::Manual,
+                                        workbench->activeSession()));
+        workbench->addDocument(imported, QStringLiteral("Imported"), QStringLiteral("file"));
+
+        QString error;
+        QVERIFY2(workbench->applyCardIdentity("A1B2C3D4", Mfc::CardType::M1K, &error),
+                 qPrintable(error));
+        QVERIFY2(workbench->readBlocksForSession(false, &error), qPrintable(error));
+        QCOMPARE(workbench->document().block(5).state, Mfc::BlockState::Modified);
+        QVERIFY(!workbench->snapshotDocument().blockReadIn(5, workbench->activeSession()));
+        QDir::setCurrent(oldCwd);
+    }
+
     void commandPaletteNormalizes()
     {
         QCOMPARE(CommandPalette::normalized(QStringLiteral("  Save   File ")),

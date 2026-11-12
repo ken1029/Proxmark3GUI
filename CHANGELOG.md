@@ -12,6 +12,13 @@
 
 # Change Log
 
+### V0.4.1 (mfc-r10, card snapshot from imported documents)
++ Fix "Card snapshot" showing 0 blocks after importing a BIN/EML/JSON dump. `Read missing blocks` now reads every block that is not evidence in the current RF session (`blockReadIn(block, targetSession)`) instead of skipping every complete block, so imported and older-session data is read again from the card
++ Pressing "Card snapshot" with no current-session blocks now offers to read the card and then build the snapshot, reports missing card identity or verified keys, and keeps manual edits; reading never downgrades a complete historical block to failed when the read does not authenticate
++ The data table marks a `Read` block from an older session as "historical" (歷史), so an empty snapshot is explainable before it happens
++ Traditional Chinese strings for the new flow, plus fixes for the old `格擋`/`塊` block translations
++ `workbenchSnapshotReadsImportedDocument()` and `workbenchSnapshotKeepsModifiedBlocks()` pin the read-again and manual-edit-preservation behavior
+
 [中文](doc/CHANGELOG/CHANGELOG_zh_CN.md)  
 
 ### V0.3.7 (feature/mfc-workbench, identify on demand and nonce on tab)

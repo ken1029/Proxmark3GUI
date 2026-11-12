@@ -56,6 +56,7 @@
 ## 7. 比較與寫入
 
 - 比較頁每一側可選：目前文件、卡片快照（只含目前 session 讀到的區塊與已驗證金鑰）、檔案、備份庫。實卡側會標示 UID、時間與讀取範圍。
+- 從檔案匯入的文件，block 會標示「歷史」；按「卡片快照」時若本次 session 還沒有讀回區塊，會詢問是否要讀卡後建立快照。需要先在「金鑰與存取」驗證金鑰；手動修改的區塊不會被覆蓋。
 - 結果保留 `same`／`different`／`unknown`／`incomparable`；差異列附 byte 偏移。未知不等於相同。
 - 寫入計畫：勾選要寫的 block；Block 0 與 sector trailer 需要明確勾選且通過 ACL 檢查。預覽會凍結來源與 RF session，換卡或重連後必須重新預覽。
 - 寫入結果：`verified`（讀回相符）、`failed`、`written, unverified`、`mismatch`、`blocked`。只有確定沒寫入的列會被「Retry failed only」重選。

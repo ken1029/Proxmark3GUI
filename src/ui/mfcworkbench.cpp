@@ -331,7 +331,10 @@ void MfcWorkbench::buildUi()
     searchEdit->setClearButtonEnabled(true);
     dataFilter->addWidget(searchEdit, 1);
     QPushButton* readButton = new QPushButton(tr("Read missing blocks"), dataPage);
+    readButton->setToolTip(tr("Read every block that has not been read in the current RF session. "
+                              "Imported or older blocks are read again; manually modified blocks are kept."));
     QPushButton* readUnknownButton = new QPushButton(tr("Retry unknown blocks"), dataPage);
+    readUnknownButton->setToolTip(readButton->toolTip());
     QPushButton* backupButton = new QPushButton(tr("Save backup..."), dataPage);
     QPushButton* writeButton = new QPushButton(tr("Write plan..."), dataPage);
     dataFilter->addWidget(readButton);
@@ -610,18 +613,10 @@ void MfcWorkbench::buildUi()
         compareBEdit->setText(tr("Current document (%1)").arg(tabs.value(activeIndex).name));
     });
     connect(snapshotAButton, &QPushButton::clicked, this, [this]() {
-        compareA = snapshotDocument();
-        hasCompareA = true;
-        compareAEdit->setText(tr("Card %1 snapshot %2 (%3 block(s))")
-                              .arg(compareA.uid, QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"))
-                              .arg(compareA.completeBlockCount()));
+        captureSnapshot(true);
     });
     connect(snapshotBButton, &QPushButton::clicked, this, [this]() {
-        compareB = snapshotDocument();
-        hasCompareB = true;
-        compareBEdit->setText(tr("Card %1 snapshot %2 (%3 block(s))")
-                              .arg(compareB.uid, QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"))
-                              .arg(compareB.completeBlockCount()));
+        captureSnapshot(false);
     });
     connect(libraryAButton, &QPushButton::clicked, this, [this]() {
         QString error;
@@ -1775,8 +1770,10 @@ QString MfcWorkbench::keyStateText(Mfc::KeyState state) const
     return tr("unknown");
 }
 
-QString MfcWorkbench::blockStateText(Mfc::BlockState state) const
+QString MfcWorkbench::blockStateText(Mfc::BlockState state, bool historical) const
 {
+    if(state == Mfc::BlockState::Read && historical)
+        return tr("historical");
     switch(state)
     {
     case Mfc::BlockState::Read:
@@ -1871,8 +1868,12 @@ void MfcWorkbench::refreshDataTable()
         hexItem->setData(Qt::UserRole, i);
         dataTable->setItem(row, 3, hexItem);
         dataTable->setItem(row, 4, readOnlyItem(asciiOf(hex)));
-        QTableWidgetItem* stateItem = readOnlyItem(blockStateText(block.state));
-        if(block.state == Mfc::BlockState::Failed)
+        const bool historical = block.state == Mfc::BlockState::Read
+                                && !doc.blockReadIn(i, targetSession);
+        QTableWidgetItem* stateItem = readOnlyItem(blockStateText(block.state, historical));
+        if(historical)
+            stateItem->setForeground(QColor(120, 120, 120));
+        else if(block.state == Mfc::BlockState::Failed)
             stateItem->setForeground(QColor(190, 40, 40));
         else if(block.state == Mfc::BlockState::Modified)
             stateItem->setForeground(QColor(190, 130, 0));
@@ -1915,7 +1916,9 @@ void MfcWorkbench::refreshBlockDetails()
     lines << tr("Block %1 | sector %2 | %3")
              .arg(block).arg(sector)
              .arg(doc.spec().isTrailerBlock(block) ? tr("sector trailer") : tr("data"));
-    lines << tr("State: %1").arg(blockStateText(data.state));
+    const bool historical = data.state == Mfc::BlockState::Read
+                            && !doc.blockReadIn(block, targetSession);
+    lines << tr("State: %1").arg(blockStateText(data.state, historical));
     if(data.readSession == 0)
         lines << tr("Source: file or manual edit (no RF session)");
     else
@@ -2633,19 +2636,34 @@ void MfcWorkbench::readBlocks()
 
 void MfcWorkbench::readUnknownBlocks()
 {
-    if(!deviceReady || taskRunning || cardConfirmPending || util->isChannelOwned())
+    readBlocksForSession(false, nullptr);
+}
+
+bool MfcWorkbench::readBlocksForSession(bool overwriteModified, QString* error)
+{
+    auto fail = [&](const QString& text) -> bool
+    {
+        if(error != nullptr)
+            *error = text;
+        setStatus(text);
+        return false;
+    };
+
+    if(!deviceReady || taskRunning || planBusy || cardConfirmPending
+       || util->isChannelOwned())
     {
         if(cardConfirmPending)
-            setStatus(tr("Confirming the card; retry in a moment"));
-        else if(util->isChannelOwned())
-            setStatus(tr("The client is busy; wait for it to finish"));
-        return;
+            return fail(tr("Confirming the card; retry in a moment"));
+        if(util->isChannelOwned())
+            return fail(tr("The client is busy; wait for it to finish"));
+        return fail(tr("Another device task is still running"));
     }
     if(!documentMatchesTarget())
-    {
-        setStatus(tr("Identify the card first: reads need keys verified against this card"));
-        return;
-    }
+        return fail(tr("Identify the card first: reads need keys verified against this card"));
+    if(doc.verifiedKeyCountIn(targetSession) == 0)
+        return fail(tr("No key has been verified for this card in this session. "
+                       "Open Keys && access and verify a key first."));
+
     taskRunning = true;
     taskDocumentIndex = activeIndex;
     cancelRequested = false;
@@ -2654,43 +2672,63 @@ void MfcWorkbench::readUnknownBlocks()
 
     int read = 0;
     int failed = 0;
+    int noKey = 0;
+    int keptModified = 0;
+
     for(int block = 0; block < doc.blockCount(); block++)
     {
         if(cancelRequested)
             break;
-        if(doc.blockComplete(block))
+
+        // Only a block read in this RF session is evidence for the card that is
+        // in the field now.  Imported blocks and blocks from an older session
+        // must be read again.
+        if(doc.blockReadIn(block, targetSession))
             continue;
+
+        // Reads must not silently destroy a manual edit.
+        if(doc.block(block).state == Mfc::BlockState::Modified && !overwriteModified)
+        {
+            keptModified++;
+            continue;
+        }
+
         const int sector = doc.spec().sectorOfBlock(block);
         char keyType = 'A';
         QString key;
         if(!chooseVerifiedKey(sector, &keyType, &key))
         {
-            failed++;
+            noKey++;
             continue;
         }
 
         QString hex;
-        QString error;
-        bool ok = readBlockOnce(block, keyType, key, &hex, &error);
+        QString blockError;
+        bool ok = readBlockOnce(block, keyType, key, &hex, &blockError);
         if(!ok && keyType == 'A')
         {
             const Mfc::KeyEntry& b = doc.key(sector, 'B');
             if(b.verifiedIn(targetSession) && b.hasValue())
-                ok = readBlockOnce(block, 'B', b.value, &hex, &error);
+                ok = readBlockOnce(block, 'B', b.value, &hex, &blockError);
         }
         if(!ok)
         {
             failed++;
+            // A complete historical block keeps its old value; only a block
+            // with no usable payload is marked failed.
             if(!doc.blockComplete(block))
                 doc.setBlockState(block, Mfc::BlockState::Failed);
-            tabs[activeIndex].lastOperation[block] = tr("read failed: %1").arg(error);
-            logLine(tr("Block %1: %2").arg(block).arg(error));
+            if(taskDocumentIndex >= 0 && taskDocumentIndex < tabs.size())
+                tabs[taskDocumentIndex].lastOperation[block] =
+                    tr("read failed: %1").arg(blockError);
+            logLine(tr("Block %1: %2").arg(block).arg(blockError));
             continue;
         }
 
         if(doc.spec().isTrailerBlock(block))
         {
-            doc.setBlock(block, trailerReadback(block, keyType, hex), Mfc::BlockState::Read, targetSession);
+            doc.setBlock(block, trailerReadback(block, keyType, hex),
+                         Mfc::BlockState::Read, targetSession);
             if(!doc.blockComplete(block))
                 logLine(tr("Block %1: trailer is masked by its access conditions; "
                            "verify both keys to complete it").arg(block));
@@ -2699,7 +2737,9 @@ void MfcWorkbench::readUnknownBlocks()
         {
             doc.setBlock(block, hex, Mfc::BlockState::Read, targetSession);
         }
-        tabs[activeIndex].lastOperation[block] = tr("read in session %1").arg(targetSession);
+        if(taskDocumentIndex >= 0 && taskDocumentIndex < tabs.size())
+            tabs[taskDocumentIndex].lastOperation[block] =
+                tr("read in session %1").arg(targetSession);
         read++;
         if(read % 8 == 0)
         {
@@ -2716,11 +2756,35 @@ void MfcWorkbench::readUnknownBlocks()
     refreshKeyTable();
     refreshSummary();
     applyToMifare();
-    const QString message = tr("Read %1 block(s), %2 failed, %3 unknown remain")
-                            .arg(read).arg(failed).arg(doc.unknownBlockCount());
+
+    QString message;
+    if(read == 0)
+    {
+        message = tr("Read 0 block(s): %1 failed, %2 without a verified key, "
+                     "%3 modified block(s) kept.")
+                      .arg(failed).arg(noKey).arg(keptModified);
+        if(cancelRequested)
+            message = tr("Cancelled. ") + message;
+    }
+    else
+    {
+        message = tr("Read %1 block(s), %2 failed, %3 without a key, %4 modified kept")
+                      .arg(read).arg(failed).arg(noKey).arg(keptModified);
+        if(cancelRequested)
+            message = tr("Cancelled. ") + message;
+    }
+
     tracker.finish(cancelRequested ? MfcRecovery::TaskState::Cancelled
-                                   : MfcRecovery::TaskState::Completed, message);
+                                   : MfcRecovery::TaskState::Completed,
+                   message);
     setStatus(message);
+    if(read == 0)
+    {
+        if(error != nullptr)
+            *error = message;
+        return false;
+    }
+    return true;
 }
 
 QString MfcWorkbench::trailerReadback(int block, char authType, const QString& cardHex) const
@@ -3682,6 +3746,88 @@ void MfcWorkbench::diagnoseNonceOnOpen()
     if(nonce != MfcRecovery::NonceType::Unknown)
         return;
     diagnoseNonce();
+}
+
+int MfcWorkbench::currentSessionBlockCount() const
+{
+    int count = 0;
+    for(int i = 0; i < doc.blockCount(); i++)
+        if(doc.blockReadIn(i, targetSession))
+            count++;
+    return count;
+}
+
+void MfcWorkbench::captureSnapshot(bool sideA)
+{
+    if(currentSessionBlockCount() == 0)
+    {
+        if(!deviceReady)
+        {
+            QMessageBox::information(
+                this, tr("Card snapshot"),
+                tr("Connect the Proxmark3 and identify the card first."));
+            return;
+        }
+        if(!documentMatchesTarget())
+        {
+            QMessageBox::information(
+                this, tr("Card snapshot"),
+                tr("Identify the card first. The current document does not belong "
+                   "to the card in the field."));
+            return;
+        }
+
+        QMessageBox box(this);
+        box.setWindowTitle(tr("Card snapshot"));
+        box.setText(tr("This document has no blocks read in the current session."));
+        box.setInformativeText(
+            tr("It may have been loaded from a file, a draft or an earlier connection. "
+               "Read the card now to build the snapshot? Verified keys are required; "
+               "manually modified blocks are kept."));
+        QPushButton* read = box.addButton(tr("Read card and snapshot"),
+                                          QMessageBox::AcceptRole);
+        QPushButton* keys = box.addButton(tr("Go to Keys && access"),
+                                          QMessageBox::ActionRole);
+        box.addButton(QMessageBox::Cancel);
+        box.exec();
+
+        if(box.clickedButton() == keys)
+        {
+            if(pageTabs != nullptr)
+                pageTabs->setCurrentIndex(0);
+            return;
+        }
+        if(box.clickedButton() != read)
+            return;
+
+        QString error;
+        if(!readBlocksForSession(false, &error))
+        {
+            QMessageBox::information(this, tr("Card snapshot"), error);
+            return;
+        }
+    }
+
+    Mfc::Document snapshot = snapshotDocument();
+    const QString label = tr("Card %1 snapshot %2 (%3 block(s))")
+                              .arg(snapshot.uid,
+                                   QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"))
+                              .arg(snapshot.completeBlockCount());
+    if(sideA)
+    {
+        compareA = snapshot;
+        hasCompareA = true;
+        compareAEdit->setText(label);
+    }
+    else
+    {
+        compareB = snapshot;
+        hasCompareB = true;
+        compareBEdit->setText(label);
+    }
+
+    if(snapshot.completeBlockCount() == 0)
+        setStatus(tr("Snapshot is empty: no block was read in this session"));
 }
 
 Mfc::Document MfcWorkbench::snapshotDocument() const

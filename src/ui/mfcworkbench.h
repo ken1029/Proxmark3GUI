@@ -56,6 +56,7 @@ public:
     QString targetUid() const { return targetUidValue; }
     bool hasTarget() const { return targetPresent; }
     bool documentMatchesTarget() const;
+    int currentSessionBlockCount() const;
     bool applyCardIdentity(const QString& uid, Mfc::CardType type, QString* error = nullptr);
     bool startNewDocumentForTarget(QString* error = nullptr);
     void suspendSessionForOneShot();
@@ -201,7 +202,7 @@ private:
     void setStatus(const QString& text);
     QString cardTypeName() const;
     QString keyStateText(Mfc::KeyState state) const;
-    QString blockStateText(Mfc::BlockState state) const;
+    QString blockStateText(Mfc::BlockState state, bool historical) const;
     QString nonceText() const;
     bool chooseVerifiedKey(int sector, char* type, QString* key) const;
     bool queryCardIdentity(QString* uid, Mfc::CardType* type, QString* error);
@@ -212,6 +213,8 @@ private:
     bool readBlockOnce(int block, char keyType, const QString& key, QString* hex, QString* error);
     bool loadDocumentFile(const QString& filename, Mfc::Document* out, QString* error) const;
     Mfc::Document snapshotDocument() const;
+    bool readBlocksForSession(bool overwriteModified, QString* error);
+    void captureSnapshot(bool sideA);
     bool loadCompareFromLibrary(bool sideA, QString* error = nullptr);
     bool verifyOneKey(int sector, char type, const QString& key);
     Mfc::WriteOutcome writeBlockOnce(int block, const QString& hex,
