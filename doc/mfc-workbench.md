@@ -167,6 +167,8 @@ QT_QPA_PLATFORM=offscreen xvfb-run -a wine ./gui-tests.exe
 - `workbenchWritePlanProtectsBlocks`：實際開對話框、按 Preview／手動勾選／按 Write，檢查送出的命令只有允許的 block。
 - `workbenchRequiresCardIdentity`：同容量換卡、重連、歷史專案與新文件流程。
 - `mfcSessionScopedEvidence`：key／block 的 session 歸屬與歷史保留。
+- `workbenchSnapshotReadsImportedDocument`：匯入文件的 block 不在本次 session 時，快照流程會重讀卡片。
+- `workbenchSnapshotKeepsModifiedBlocks`：重讀時保留手動修改的 block，不把它當成卡片證據。
 - `mfcTrailerAclRules`：trailer ACL 解碼與各權限（Key B 可讀、Key A 由 B 寫入等）。
 - `cancelKeepsChannelOwned`／`isolatedCommandUsesOneShotClient`：取消後仍封鎖通道、晚到 marker 才釋放；一次性 client 不排入任何 stdin。
 - `workbenchBackupSidecarHashesFile`：JSON／EML／BIN 的 sidecar 與檔案實際 bytes 相符。
