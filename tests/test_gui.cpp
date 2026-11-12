@@ -3465,6 +3465,70 @@ private slots:
         QDir::setCurrent(oldCwd);
     }
 
+    // The compare page must offer to read the card when an imported document
+    // has no blocks from the current RF session.
+    void workbenchSnapshotButtonReadsImportedDocument()
+    {
+        struct DemoGuard
+        {
+            ~DemoGuard() { Util::setDemoMode(false); }
+        } demoGuard;
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString oldCwd = QDir::currentPath();
+        QDir::setCurrent(dir.path());
+        QSettings settings("GUIsettings.ini", QSettings::IniFormat);
+        settings.setValue("language/name", "en_US");
+        settings.sync();
+
+        Util::setDemoMode(true);
+        MainWindow window;
+        window.initUI();
+        MfcWorkbench* workbench = window.findChild<MfcWorkbench*>();
+        QVERIFY(workbench != nullptr);
+        workbench->setDeviceReady(true);
+
+        Mfc::Document imported(Mfc::CardType::M1K);
+        imported.uid = QStringLiteral("A1B2C3D4");
+        for(int i = 0; i < imported.blockCount(); i++)
+            imported.setBlock(i, QString(32, QLatin1Char('0')), Mfc::BlockState::Read, 0);
+        QVERIFY(imported.setKeyVerified(0, 'A', "FFFFFFFFFFFF", Mfc::KeySource::Manual,
+                                        workbench->activeSession()));
+        workbench->addDocument(imported, QStringLiteral("Imported"), QStringLiteral("file"));
+        QString error;
+        QVERIFY2(workbench->applyCardIdentity("A1B2C3D4", Mfc::CardType::M1K, &error),
+                 qPrintable(error));
+
+        QPushButton* button = workbench->findChild<QPushButton*>("mfcCompareSnapshotA");
+        QLineEdit* edit = workbench->findChild<QLineEdit*>("mfcCompareAEdit");
+        QVERIFY(button != nullptr);
+        QVERIFY(edit != nullptr);
+
+        QTimer timer;
+        QObject::connect(&timer, &QTimer::timeout, &timer, [&timer]() {
+            QMessageBox* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+            if(box == nullptr)
+                return;
+            for(QAbstractButton* button : box->buttons())
+                if(button->text().contains(QStringLiteral("Read card")))
+                {
+                    button->click();
+                    timer.stop();
+                    return;
+                }
+            box->reject();
+            timer.stop();
+        });
+        timer.start(10);
+        button->click();
+        timer.stop();
+
+        QVERIFY2(!edit->text().isEmpty(), "snapshot label is empty");
+        QVERIFY2(!edit->text().contains(QStringLiteral("(0 block")),
+                 qPrintable(edit->text()));
+        QDir::setCurrent(oldCwd);
+    }
+
     void commandPaletteNormalizes()
     {
         QCOMPARE(CommandPalette::normalized(QStringLiteral("  Save   File ")),

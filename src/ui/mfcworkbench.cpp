@@ -376,7 +376,9 @@ void MfcWorkbench::buildUi()
     QVBoxLayout* compareLayout = new QVBoxLayout(comparePage);
     QGridLayout* paths = new QGridLayout();
     compareAEdit = new QLineEdit(comparePage);
+    compareAEdit->setObjectName("mfcCompareAEdit");
     compareBEdit = new QLineEdit(comparePage);
+    compareBEdit->setObjectName("mfcCompareBEdit");
     QPushButton* loadAButton = new QPushButton(tr("Load A..."), comparePage);
     QPushButton* loadBButton = new QPushButton(tr("Load B..."), comparePage);
     QPushButton* documentAButton = new QPushButton(tr("Use document"), comparePage);
